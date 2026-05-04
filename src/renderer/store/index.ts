@@ -96,6 +96,8 @@ interface StoreActions {
   addTag: (tag: Tag) => void
   updateTag: (id: string, partial: Partial<Tag>) => void
   removeTag: (id: string) => void
+  removeTagsBatch: (ids: string[]) => void
+  clearAllTags: () => void
   toggleTagSelection: (id: string) => void
   toggleTagFavorite: (id: string) => void
   clearSelection: () => void
@@ -368,6 +370,13 @@ export const useAppStore = create<StoreState & StoreActions>()(
           tags: state.tags.filter((t) => t.id !== id),
           selectedTagIds: state.selectedTagIds.filter((i) => i !== id),
         })),
+      removeTagsBatch: (ids) =>
+        set((state) => ({
+          tags: state.tags.filter((t) => !ids.includes(t.id)),
+          selectedTagIds: state.selectedTagIds.filter((i) => !ids.includes(i)),
+        })),
+      clearAllTags: () =>
+        set({ tags: [], selectedTagIds: [] }),
       toggleTagSelection: (id) =>
         set((state) => ({
           selectedTagIds: state.selectedTagIds.includes(id)
@@ -529,9 +538,19 @@ export const useAppStore = create<StoreState & StoreActions>()(
             firstChapter: result.firstChapter || '',
           }
 
-          // 确保所有角色有正确的 roleType
-          const fixRoleType = (c: any, defaultRole: string) => ({ ...c, roleType: (['protagonist', 'supporting', 'antagonist', 'minor'].includes(c.roleType) ? c.roleType : defaultRole) })
-          const allChars = [fixRoleType(safeResult.protagonist, 'protagonist'), ...safeResult.supporting.map((c: any) => fixRoleType(c, 'supporting'))]
+          // 确保所有角色有正确的 roleType（问题2：多角色区分主角/配角/反派）
+          const fixRoleType = (c: any, defaultRole: string) => {
+            const roleType = (['protagonist', 'supporting', 'antagonist', 'minor'].includes(c.roleType) ? c.roleType : defaultRole)
+            return { ...c, roleType }
+          }
+          const allChars = [
+            fixRoleType(safeResult.protagonist, 'protagonist'),
+            ...safeResult.supporting.map((c: any, index: number) => {
+              // 如果 AI 已返回 roleType 则保留，否则根据索引分配
+              const roleType = c.roleType || (index === 0 ? 'supporting' : index === 1 ? 'antagonist' : 'minor')
+              return fixRoleType({ ...c, roleType }, roleType)
+            })
+          ]
           const charIds = allChars.map((c) => c.id)
 
           const newChapters = safeResult.chapters.map((ch: any, index: number) => ({
@@ -572,13 +591,20 @@ export const useAppStore = create<StoreState & StoreActions>()(
             })),
           ]
 
-          // 生成剧情大纲节点
-          const outlineNodes = newChapters.slice(0, 5).map((ch: any, idx: number) => ({
-            id: genId(),
-            title: ch.title,
-            content: ch.summary,
-            order: idx,
-          }))
+          // 生成剧情大纲节点（问题5：从 plotLine events 生成，而非章节名）
+          const outlineNodes = plotEvents.length > 0
+            ? plotEvents.slice(0, 5).map((e: any, idx: number) => ({
+                id: genId(),
+                title: e.title || `剧情节点 ${idx + 1}`,
+                content: e.description || '',
+                order: idx,
+              }))
+            : [
+                { id: genId(), title: '第一幕 开端', content: '故事背景介绍，主角登场', order: 0 },
+                { id: genId(), title: '第二幕 发展', content: '冲突升级，矛盾激化', order: 1 },
+                { id: genId(), title: '第三幕 高潮', content: '最终对决，真相揭晓', order: 2 },
+                { id: genId(), title: '第四幕 结局', content: '尘埃落定，新的开始', order: 3 },
+              ]
 
           // 创建新的小说对象，只存储 ID 引用
           const novel: Novel = {
@@ -598,19 +624,32 @@ export const useAppStore = create<StoreState & StoreActions>()(
             outlineNodes,
           }
 
-          // 完全替换旧数据，不追加
+          // 问题1：只替换推导相关数据，保留用户其他数据（标签、记忆、AI模型、对话、日志等）
           return {
             currentNovel: novel,
             characters: allChars,
             worldSettings: [safeResult.worldSetting],
             plotLines: [safeResult.plotLine],
             chapters: newChapters,
-            volumes: [], // 清空卷数据
+            volumes: [],
             emotionEvents,
             outlineNodes,
-            memories: [], // 清空记忆
-            conversations: [], // 清空对话
-            logs: [], // 清空日志
+            // 保留用户原有数据（不覆盖）
+            tags: state.tags,
+            memories: state.memories,
+            aiModels: state.aiModels,
+            currentModel: state.currentModel,
+            conversations: state.conversations,
+            logs: [
+              {
+                id: genId(),
+                type: 'success' as const,
+                message: `一键推导完成：${safeResult.title}`,
+                detail: `生成 ${allChars.length} 个角色，${newChapters.length} 个章节`,
+                timestamp: Date.now(),
+              },
+              ...state.logs,
+            ].slice(0, 500),
           }
         }),
 
@@ -723,6 +762,7 @@ export const useAppStore = create<StoreState & StoreActions>()(
         conversations: state.conversations,
         emotionEvents: state.emotionEvents,
         outlineNodes: state.outlineNodes,
+        selectedTagIds: state.selectedTagIds,
         fontSize: state.fontSize,
         autoSaveInterval: state.autoSaveInterval,
         autoBackup: state.autoBackup,

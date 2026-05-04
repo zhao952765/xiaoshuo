@@ -10,6 +10,11 @@ export const TAG_CATEGORY_CONFIG: Record<TagCategory, { label: string; color: st
   fantasy: { label: '特殊幻想', color: '#a855f7', icon: '✨', description: '超自然、特殊设定、幻想元素' },
 }
 
+// 分类优先级
+export const CATEGORY_PRIORITY: TagCategory[] = [
+  'fetish', 'costume', 'fantasy', 'plot', 'profession', 'scene', 'character'
+]
+
 export const PRESET_TAG_GROUPS = [
   { name: '高H御姐组合', tags: ['冷艳御姐', '高冷女总裁', '办公室', '高H', '黑丝', '强制高潮'], description: '经典御姐情节，高肉戏浓度' },
   { name: '人妻NTR组合', tags: ['骚浪人妻', '成熟少妇', '人妻NTR', '偷情', '酒店套房'], description: '人妻出轨情节，禁忌刺激' },
@@ -21,107 +26,170 @@ export const PRESET_TAG_GROUPS = [
   { name: '女警制服组合', tags: ['女警', '女仆装', '高跟鞋', '强制高潮', '后入'], description: '制服诱惑+强制情节' },
 ]
 
-// 离线词库
+// ==================== 权重推荐系统 ====================
+export const TAG_WEIGHT_RECOMMENDATIONS: Record<string, number> = {
+  '人妻NTR': 1.55, '骚浪人妻': 1.48, '成熟少妇': 1.45, '强制': 1.48,
+  '时停': 1.58, '时间停止': 1.55, '催眠': 1.55, '深度催眠': 1.50,
+  '强制高潮': 1.52, '连续高潮': 1.50, '潮吹': 1.48, '羞辱': 1.45,
+  '意识操控': 1.48, '身体敏感化': 1.45, '性感女警': 1.40,
+  '蕾丝内衣': 1.35, '半脱制服': 1.40, '办公室': 1.25,
+};
+
+export const CATEGORY_DEFAULT_WEIGHT: Record<TagCategory, number> = {
+  character: 1.20, profession: 1.18, scene: 1.15, plot: 1.32,
+  fetish: 1.45, costume: 1.30, fantasy: 1.48,
+};
+
+// ==================== 性能优化：缓存 + 查找表 ====================
+const categoryLookupMap = new Map<string, TagCategory>();
+const weightCache = new Map<string, number>();
+const expandCache = new Map<string, Record<TagCategory, string[]>>();
+
+// 构建分类查找表（一次性构建，之后 O(1) 查询）
+function initCategoryLookup() {
+  if (categoryLookupMap.size > 0) return;
+
+  for (const cat of CATEGORY_PRIORITY) {
+    TAG_KEYWORD_MAP[cat].forEach(kw => {
+      const key = kw.toLowerCase().trim();
+      if (!categoryLookupMap.has(key)) {
+        categoryLookupMap.set(key, cat);
+      }
+    });
+  }
+}
+
+export function autoDetectCategory(tagName: string): TagCategory {
+  initCategoryLookup();
+  const lower = tagName.toLowerCase().trim();
+
+  if (categoryLookupMap.has(lower)) return categoryLookupMap.get(lower)!;
+
+  // 模糊匹配
+  for (const [key, cat] of categoryLookupMap) {
+    if (lower.includes(key) || key.includes(lower)) {
+      return cat;
+    }
+  }
+  return 'character';
+}
+
+export function getRecommendedWeight(tag: string): number {
+  if (weightCache.has(tag)) return weightCache.get(tag)!;
+
+  const exact = TAG_WEIGHT_RECOMMENDATIONS[tag];
+  if (exact) {
+    weightCache.set(tag, exact);
+    return exact;
+  }
+
+  for (const [key, weight] of Object.entries(TAG_WEIGHT_RECOMMENDATIONS)) {
+    if (tag.includes(key) || key.includes(tag)) {
+      const result = Math.max(1.15, weight * 0.92);
+      weightCache.set(tag, result);
+      return result;
+    }
+  }
+
+  const cat = autoDetectCategory(tag);
+  const result = CATEGORY_DEFAULT_WEIGHT[cat] || 1.15;
+  weightCache.set(tag, result);
+  return result;
+}
+
+/** 一键生成带权重的完整提示词 */
+export function generateWeightedPrompt(
+  keywords: string[],
+  options: { maxTags?: number; addQuality?: boolean } = {}
+): string {
+  const { maxTags = 35, addQuality = true } = options;
+
+  const expanded = offlineExpand(keywords);
+  const allTags: { tag: string; weight: number }[] = [];
+
+  (Object.keys(expanded) as TagCategory[]).forEach(cat => {
+    expanded[cat].forEach(tag => {
+      allTags.push({ tag, weight: getRecommendedWeight(tag) });
+    });
+  });
+
+  allTags.sort((a, b) => b.weight - a.weight);
+
+  let prompt = allTags
+    .slice(0, maxTags)
+    .map(item => item.weight > 1.22 ? `(${item.tag}:${item.weight.toFixed(2)})` : item.tag)
+    .join('，');
+
+  if (addQuality) {
+    prompt += '，高细节，精致画面，昏暗灯光，汗水，凌乱衣物，电影光影，详细背景';
+  }
+
+  return prompt;
+}
+
+// ==================== 分类关键词 & LOCAL_TAG_RULES ====================
+export const TAG_KEYWORD_MAP: Record<TagCategory, string[]> = {
+  character: ['温柔御姐', '高冷女王', '成熟少妇', '骚浪人妻', '人妻', '清纯学生妹', '病娇', '傲娇', '巨乳', '黑长直', '媚眼', '丰满肉感'],
+  profession: ['女警', '警察', '女教师', '老师', '护士', '空姐', '女秘书', 'OL', '女上司'],
+  scene: ['办公室', '卧室', '客厅', '家里', '审讯室', '浴室', '厨房'],
+  plot: ['人妻NTR', '办公室不伦', '强制NTR', '禁忌关系', '丈夫旁观'],
+  fetish: ['强制', '强制高潮', '连续高潮', '潮吹', '失禁', '羞辱', '捆绑', '药物催情'],
+  costume: ['蕾丝内衣', '半脱制服', '撕裂丝袜', '透明情趣装', '吊带丝袜', '高跟鞋'],
+  fantasy: ['时停', '催眠', '意识操控', '身体敏感化', '记忆篡改'],
+};
+
 export const LOCAL_TAG_RULES: { keyword: string; category: TagCategory; expansions: string[] }[] = [
-  // 人物类型
-  { keyword: '冷艳御姐', category: 'character', expansions: ['高冷', '成熟', '魅力', '傲娇', '冰山美人', '女王'] },
-  { keyword: '高冷女总裁', category: 'character', expansions: ['强势', '霸道', '高智商', '商业精英', '气场强'] },
-  { keyword: '强势女上司', category: 'character', expansions: ['领导力', '压迫感', '职场', '掌控欲', '严厉'] },
-  { keyword: '温柔贤妻', category: 'character', expansions: ['贤惠', '体贴', '居家', '柔顺', '传统'] },
-  { keyword: '反差婊', category: 'character', expansions: ['表面纯真', '内心浪荡', '绿茶', '虚伪', '双面'] },
-  { keyword: '病娇腹黑双胞胎', category: 'character', expansions: ['偏执', '占有欲', '危险', '双重人格', '跟踪狂'] },
-  { keyword: '腹黑萝莉', category: 'character', expansions: ['心机', '外表可爱', '腹黑', '暗黑', '萌系'] },
-  { keyword: '骚浪人妻', category: 'character', expansions: ['欲求不满', '出轨', '性感', '成熟', '魅惑'] },
-  { keyword: '成熟少妇', category: 'character', expansions: ['风韵', '性感', '经验丰富', '魅力', '丰满'] },
-  { keyword: '傲娇大小姐', category: 'character', expansions: ['千金', '刁蛮', '公主病', '任性', '可爱'] },
-  { keyword: '冰山美女', category: 'character', expansions: ['高冷', '难以接近', '冷漠', '外冷内热'] },
-  { keyword: '邻居姐姐', category: 'character', expansions: ['温柔', '亲切', '成熟', '邻家', '好感'] },
+  { keyword: '骚浪人妻', category: 'character', expansions: ['成熟少妇', '人妻'] },
+  { keyword: '人妻NTR', category: 'plot', expansions: ['办公室不伦', '强制NTR'] },
+  { keyword: '强制', category: 'fetish', expansions: ['强制高潮'] },
+  { keyword: '蕾丝内衣', category: 'costume', expansions: ['透明情趣装'] },
+  { keyword: '时停', category: 'fantasy', expansions: ['时间停止'] },
+  { keyword: '催眠', category: 'fantasy', expansions: ['深度催眠'] },
+];
 
-  // 职业身份
-  { keyword: '女总裁', category: 'profession', expansions: ['CEO', '霸道', '强势', '高智商', '商业帝国'] },
-  { keyword: '女秘书', category: 'profession', expansions: ['助理', '职场OL', '干练', '细心', '贴身'] },
-  { keyword: '职场OL', category: 'profession', expansions: ['职业装', '高跟鞋', '黑丝', '干练', 'office lady'] },
-  { keyword: '女医生', category: 'profession', expansions: ['白大褂', '手术室', '专业', '温柔', '护士'] },
-  { keyword: '护士', category: 'profession', expansions: ['白衣天使', '温柔', '照顾', '护士服', '护理'] },
-  { keyword: '空姐', category: 'profession', expansions: ['制服', '高跟鞋', '优雅', '服务', '空乘'] },
-  { keyword: '女教师', category: 'profession', expansions: ['老师', '讲台', '知性', '教育', '师生'] },
-  { keyword: '女律师', category: 'profession', expansions: ['法庭', '辩护', '专业', '理性', '西装'] },
-  { keyword: '女主播', category: 'profession', expansions: ['直播', '网红', '镜头', '表演', '性感'] },
-  { keyword: '女模特', category: 'profession', expansions: ['T台', '时尚', '身材', '美丽', '走秀'] },
-  { keyword: '女警', category: 'profession', expansions: ['执法', '正义', '制服', '英姿', '警察'] },
-
-  // 场景地点
-  { keyword: '办公室', category: 'scene', expansions: ['职场', '办公桌', '会议室', '加班', '上司'] },
-  { keyword: '会议室', category: 'scene', expansions: ['谈判', '会议', '投影', '严肃', '密闭'] },
-  { keyword: '电梯', category: 'scene', expansions: ['密闭', '狭小', '上升', '意外', '偶遇'] },
-  { keyword: '地下停车场', category: 'scene', expansions: ['昏暗', '隐蔽', '停车', '车库', '幽会'] },
-  { keyword: '酒店套房', category: 'scene', expansions: ['豪华', '大床', '浴室', '浪漫', '私密'] },
-  { keyword: '情趣酒店', category: 'scene', expansions: ['主题房', '道具', 'SM', '特殊', '氛围'] },
-  { keyword: '大学校园', category: 'scene', expansions: ['教室', '图书馆', '操场', '宿舍', '青春'] },
-  { keyword: '图书馆', category: 'scene', expansions: ['安静', '书架', '学习', '偶遇', '文艺'] },
-  { keyword: '浴室', category: 'scene', expansions: ['洗澡', '湿身', '泡沫', '诱惑', '卫生间'] },
-  { keyword: '厨房', category: 'scene', expansions: ['烹饪', '居家', '围裙', '诱惑', '食物'] },
-  { keyword: '豪车后座', category: 'scene', expansions: ['名车', '豪华', '私密', '激情', '车载'] },
-
-  // 关系剧情
-  { keyword: '人妻NTR', category: 'plot', expansions: ['出轨', '偷情', '绿帽', '已婚', '背叛'] },
-  { keyword: '禁忌之恋', category: 'plot', expansions: ['伦理', '禁忌', '不被允许', '背德', '挣扎'] },
-  { keyword: '偷情', category: 'plot', expansions: ['外遇', '秘密', '幽会', '刺激', '隐瞒'] },
-  { keyword: '师生恋', category: 'plot', expansions: ['老师学生', '禁忌', '年龄差', '权力', '学校'] },
-  { keyword: '强取豪夺', category: 'plot', expansions: ['强制', '霸道', '占有', '控制', '征服'] },
-  { keyword: '调教堕落', category: 'plot', expansions: ['调教', 'SM', '堕落', '驯化', '臣服'] },
-  { keyword: '黑化', category: 'plot', expansions: ['复仇', '变坏', '腹黑', '觉醒', '反杀'] },
-  { keyword: '旧情重燃', category: 'plot', expansions: ['前任', '回忆', '复合', '旧爱', '重逢'] },
-  { keyword: '先恨后爱', category: 'plot', expansions: ['仇恨', '误解', '真相', '爱上', '反转'] },
-
-  // 性癖玩法
-  { keyword: '高H', category: 'fetish', expansions: ['肉戏', '激烈', '详细', '频繁', '高潮'] },
-  { keyword: '肉戏密集', category: 'fetish', expansions: ['详细描写', '多次', '激烈', '持续', '激情'] },
-  { keyword: '黑丝', category: 'fetish', expansions: ['丝袜', '诱惑', '美腿', '性感', 'OL'] },
-  { keyword: '潮吹', category: 'fetish', expansions: ['女性高潮', '喷水', '敏感', '失态', '快感'] },
-  { keyword: '连续高潮', category: 'fetish', expansions: ['多次', '高潮迭起', '持续', '强烈', '极限'] },
-  { keyword: '失禁', category: 'fetish', expansions: ['失控', '羞耻', '生理', '极端', '快感'] },
-  { keyword: '深喉', category: 'fetish', expansions: ['口交', '深吞', '喉结', '窒息', '极限'] },
-  { keyword: '颜射', category: 'fetish', expansions: ['射精', '面部', '凌乱', '羞耻', '颜面'] },
-  { keyword: '中出', category: 'fetish', expansions: ['体内', '射精', '怀孕', '危险', '内射'] },
-  { keyword: '后入', category: 'fetish', expansions: ['背后式', '深入', '动物式', '原始', '背面'] },
-  { keyword: '露出play', category: 'fetish', expansions: ['公共场合', '暴露', '羞耻', '大胆', '偷窥'] },
-  { keyword: '强制高潮', category: 'fetish', expansions: ['被迫', '高潮', '强制', '失控', '药物'] },
-  { keyword: '媚药', category: 'fetish', expansions: ['春药', '催情', '失控', '欲望', '药物'] },
-
-  // 恋物制服
-  { keyword: 'OL制服', category: 'costume', expansions: ['职业装', '西装', '衬衫', '包臀裙', '职场'] },
-  { keyword: '护士服', category: 'costume', expansions: ['白衣', '护士', '纯洁', '诱惑', '角色扮演'] },
-  { keyword: '空姐服', category: 'costume', expansions: ['制服', '优雅', '服务', '空乘', '套装'] },
-  { keyword: '女仆装', category: 'costume', expansions: ['女仆', '角色扮演', '可爱', '顺从', '家务'] },
-  { keyword: '撕丝袜', category: 'costume', expansions: ['撕破', '破坏', '暴力', '性感', '脱衣'] },
-  { keyword: '白丝', category: 'costume', expansions: ['白色丝袜', '纯洁', '可爱', '诱惑', '美腿'] },
-  { keyword: '高跟鞋', category: 'costume', expansions: ['高跟鞋', '性感', '优雅', '美腿', '诱惑'] },
-  { keyword: '蕾丝内衣', category: 'costume', expansions: ['蕾丝', '性感', '精致', '诱惑', '内衣'] },
-  { keyword: '情趣内衣', category: 'costume', expansions: ['性感', '诱惑', '特殊', '挑逗', '内衣'] },
-  { keyword: '丁字裤', category: 'costume', expansions: ['性感', '暴露', '丁字', '诱惑', 'minimal'] },
-
-  // 特殊幻想
-  { keyword: '时停', category: 'fantasy', expansions: ['时间停止', '静止', '暂停', '无敌', '为所欲为'] },
-  { keyword: '催眠', category: 'fantasy', expansions: ['暗示', '控制', '洗脑', '潜意识', '操控'] },
-  { keyword: '梦境', category: 'fantasy', expansions: ['梦中', '潜意识', '虚幻', '真实', '梦境现实'] },
-  { keyword: '触手', category: 'fantasy', expansions: ['触手', '怪物', '异形', '缠绕', '异种'] },
-  { keyword: '公共露出', category: 'fantasy', expansions: ['公共场所', '暴露', '羞耻', '大胆', '偷窥'] },
-  { keyword: '怪物play', category: 'fantasy', expansions: ['怪物', '异形', '兽交', '科幻', '异种'] },
-]
+function fuzzyMatch(a: string, b: string): boolean {
+  const k1 = a.toLowerCase().trim();
+  const k2 = b.toLowerCase().trim();
+  return k1 === k2 || k2.includes(k1) || k1.includes(k2);
+}
 
 export function offlineExpand(keywords: string[]): Record<TagCategory, string[]> {
+  const cacheKey = keywords.slice().sort().join('|');
+  if (expandCache.has(cacheKey)) return expandCache.get(cacheKey)!;
+
   const result: Record<TagCategory, string[]> = {
     character: [], profession: [], scene: [], plot: [], fetish: [], costume: [], fantasy: [],
-  }
-  keywords.forEach((kw) => {
-    const rule = LOCAL_TAG_RULES.find((r) => r.keyword === kw || kw.includes(r.keyword) || r.keyword.includes(kw))
-    if (rule) {
-      if (!result[rule.category].includes(rule.keyword)) result[rule.category].push(rule.keyword)
-      rule.expansions.forEach((exp) => { if (!result[rule.category].includes(exp)) result[rule.category].push(exp) })
-    } else {
-      if (!result.character.includes(kw)) result.character.push(kw)
+  };
+
+  for (const rawKw of keywords) {
+    const kw = rawKw.trim();
+    let matched = false;
+
+    for (const rule of LOCAL_TAG_RULES) {
+      if (fuzzyMatch(kw, rule.keyword)) {
+        const cat = rule.category;
+        if (!result[cat].includes(rule.keyword)) result[cat].push(rule.keyword);
+        rule.expansions.forEach(exp => {
+          if (!result[cat].includes(exp)) result[cat].push(exp);
+        });
+        matched = true;
+        break;
+      }
     }
-  })
-  return result
+
+    if (!matched) {
+      const cat = autoDetectCategory(kw);
+      if (!result[cat].includes(kw)) result[cat].push(kw);
+    }
+  }
+
+  // 限制缓存大小
+  if (expandCache.size > 300) expandCache.clear();
+  expandCache.set(cacheKey, result);
+  return result;
+}
+
+/** 统一入口函数 */
+export function createFullPrompt(keywords: string[], useWeight: boolean = true): string {
+  return useWeight ? generateWeightedPrompt(keywords) : keywords.join('，');
 }

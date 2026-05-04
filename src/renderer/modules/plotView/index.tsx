@@ -285,7 +285,7 @@ export default function PlotView() {
           </div>
         )}
 
-        {/* ===== 世界观 ===== */}
+        {/* ===== 世界观（问题3：完整显示规则/地点/时间线/社会/文化/经济） ===== */}
         {activeTab === 'world' && (
           <div>
             {worlds.length === 0 ? (
@@ -294,30 +294,61 @@ export default function PlotView() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 {worlds.map((w) => (
                   <div key={w.id} style={{ background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '10px', padding: '16px' }}>
-                    <div style={{ fontSize: '15px', fontWeight: 600, color: '#fff', marginBottom: '6px' }}>{w.name}</div>
-                    <div style={{ fontSize: '13px', color: '#888', lineHeight: 1.6, marginBottom: '8px' }}>{w.overview || w.description || '暂无描述'}</div>
+                    <div style={{ fontSize: '16px', fontWeight: 700, color: '#fff', marginBottom: '8px' }}>{w.name}</div>
+
+                    {/* 概述 */}
+                    <div style={{ fontSize: '13px', color: '#ccc', lineHeight: 1.6, marginBottom: '12px' }}>
+                      {w.overview || w.description || '暂无描述'}
+                    </div>
+
+                    {/* 规则 */}
                     {w.rules?.length > 0 && (
-                      <div style={{ marginBottom: '8px' }}>
-                        <div style={{ fontSize: '12px', color: '#6366f1', fontWeight: 600, marginBottom: '4px' }}>世界规则：</div>
-                        {w.rules.map((r, i) => (
-                          <div key={i} style={{ fontSize: '12px', color: '#888', lineHeight: 1.6, paddingLeft: '12px' }}>• {r.name}: {r.description}</div>
+                      <div style={{ marginTop: '12px' }}>
+                        <div style={{ fontSize: '12px', color: '#6366f1', fontWeight: 600, marginBottom: '6px' }}>世界规则（{w.rules.length}）</div>
+                        {w.rules.map((r: any, i: number) => (
+                          <div key={i} style={{ padding: '8px 12px', background: '#1a1a1a', borderRadius: '6px', marginBottom: '4px' }}>
+                            <div style={{ fontSize: '13px', color: '#e0e0e0', fontWeight: 500 }}>{r.name}</div>
+                            <div style={{ fontSize: '12px', color: '#888' }}>{r.description}</div>
+                            {r.scope && <div style={{ fontSize: '11px', color: '#666', marginTop: '2px' }}>适用范围：{r.scope}</div>}
+                            {r.limit && <div style={{ fontSize: '11px', color: '#666' }}>限制：{r.limit}</div>}
+                          </div>
                         ))}
                       </div>
                     )}
+
+                    {/* 地点 */}
                     {w.locations?.length > 0 && (
-                      <div style={{ marginBottom: '8px' }}>
-                        <div style={{ fontSize: '12px', color: '#10b981', fontWeight: 600, marginBottom: '4px' }}>关键地点：</div>
-                        {w.locations.map((loc, i) => (
-                          <div key={i} style={{ fontSize: '12px', color: '#888', lineHeight: 1.6, paddingLeft: '12px' }}>• {loc.name}: {loc.description}</div>
+                      <div style={{ marginTop: '12px' }}>
+                        <div style={{ fontSize: '12px', color: '#10b981', fontWeight: 600, marginBottom: '6px' }}>关键地点（{w.locations.length}）</div>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                          {w.locations.map((loc: any, i: number) => (
+                            <span key={i} style={{ padding: '4px 10px', background: 'rgba(16,185,129,0.1)', color: '#34d399', borderRadius: '6px', fontSize: '12px' }}>
+                              {loc.name}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 时间线 */}
+                    {w.timeline?.length > 0 && (
+                      <div style={{ marginTop: '12px' }}>
+                        <div style={{ fontSize: '12px', color: '#f59e0b', fontWeight: 600, marginBottom: '6px' }}>历史时间线（{w.timeline.length}）</div>
+                        {w.timeline.map((t: any, i: number) => (
+                          <div key={i} style={{ padding: '6px 12px', background: '#1a1a1a', borderRadius: '6px', marginBottom: '4px', fontSize: '12px', color: '#888' }}>
+                            <span style={{ color: '#f59e0b', fontWeight: 600 }}>{t.era || t.period}：</span>
+                            {t.title || (Array.isArray(t.events) ? t.events.join('、') : t.events)}
+                          </div>
                         ))}
                       </div>
                     )}
-                    {w.timeline?.length > 0 && (
-                      <div>
-                        <div style={{ fontSize: '12px', color: '#f59e0b', fontWeight: 600, marginBottom: '4px' }}>历史时间线：</div>
-                        {w.timeline.map((t, i) => (
-                          <div key={i} style={{ fontSize: '12px', color: '#888', lineHeight: 1.6, paddingLeft: '12px' }}>• {t.era && `[${t.era}] `}{t.title}: {t.description}</div>
-                        ))}
+
+                    {/* 社会/文化/经济 */}
+                    {(w.society || w.culture || w.economy) && (
+                      <div style={{ marginTop: '12px', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                        {w.society && <span style={{ fontSize: '12px', color: '#888' }}>🏛️ 社会：{w.society}</span>}
+                        {w.culture && <span style={{ fontSize: '12px', color: '#888' }}>🎭 文化：{w.culture}</span>}
+                        {w.economy && <span style={{ fontSize: '12px', color: '#888' }}>💰 经济：{w.economy}</span>}
                       </div>
                     )}
                   </div>
@@ -327,51 +358,65 @@ export default function PlotView() {
           </div>
         )}
 
-        {/* ===== 感情线 ===== */}
+        {/* ===== 感情线（问题4：空事件时有默认生成按钮） ===== */}
         {activeTab === 'emotion' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ color: '#888', fontSize: '13px' }}>管理感情发展与肉欲情节的时间线</span>
-              <button
-                onClick={() => {
-                  setEmotionEvents(prev => [...prev, {
-                    id: Date.now().toString(),
-                    title: '',
-                    description: '',
-                    type: 'emotion',
-                    characterIds: []
-                  }])
-                }}
-                style={{
-                  padding: '8px 16px',
-                  background: '#6366f1',
-                  border: 'none',
-                  borderRadius: '8px',
-                  color: '#fff',
-                  fontSize: '14px',
-                  cursor: 'pointer',
-                }}
-              >
-                + 添加事件
-              </button>
+              {emotionEvents.length > 0 ? (
+                <button
+                  onClick={() => {
+                    setEmotionEvents(prev => [...prev, {
+                      id: Date.now().toString(),
+                      title: '',
+                      description: '',
+                      type: 'emotion',
+                      characterIds: []
+                    }])
+                  }}
+                  style={{
+                    padding: '8px 16px',
+                    background: '#6366f1',
+                    border: 'none',
+                    borderRadius: '8px',
+                    color: '#fff',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  + 添加事件
+                </button>
+              ) : null}
             </div>
 
-            <div style={{ position: 'relative', paddingLeft: '32px' }}>
-              {/* 时间轴线 */}
-              <div style={{
-                position: 'absolute',
-                left: '10px',
-                top: '8px',
-                bottom: '8px',
-                width: '2px',
-                background: 'linear-gradient(to bottom, #ec4899, #6366f1, #ef4444)',
-                borderRadius: '1px',
-                opacity: 0.5
-              }} />
-
-              {emotionEvents.filter((e) => adultMode || e.type === 'emotion').length === 0 ? (
-                <p style={{ color: '#666', padding: '40px 0' }}>暂无感情线事件，点击右上角添加</p>
-              ) : (
+            {emotionEvents.filter((e) => adultMode || e.type === 'emotion').length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '60px 0' }}>
+                <p style={{ color: '#666', marginBottom: '16px' }}>暂无感情线事件</p>
+                <button
+                  onClick={() => {
+                    const defaultEvents = [
+                      { id: Date.now().toString(), title: '初次相遇', description: '主角与关键角色第一次相遇，命运的齿轮开始转动...', type: 'emotion' as const, characterIds: characters.slice(0, 2).map(c => c.id), order: 0 },
+                      { id: (Date.now() + 1).toString(), title: '感情升温', description: '两人关系逐渐亲密，彼此产生好感...', type: 'emotion' as const, characterIds: characters.slice(0, 2).map(c => c.id), order: 1 },
+                      { id: (Date.now() + 2).toString(), title: '情感转折', description: '突发事件检验两人之间的信任和感情...', type: 'emotion' as const, characterIds: characters.slice(0, 2).map(c => c.id), order: 2 },
+                    ]
+                    setEmotionEvents(defaultEvents)
+                    useStore.setState({ emotionEvents: defaultEvents })
+                  }}
+                  style={{
+                    marginTop: '12px',
+                    padding: '8px 24px',
+                    background: '#6366f1',
+                    border: 'none',
+                    borderRadius: '8px',
+                    color: '#fff',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  + 生成默认感情线（3个事件）
+                </button>
+              </div>
+            ) : (
                 emotionEvents.filter((e) => adultMode || e.type === 'emotion').map((evt, idx) => (
                   <div key={evt.id} style={{ position: 'relative', marginBottom: '16px' }}>
                     {/* 节点圆点 */}
@@ -546,7 +591,6 @@ export default function PlotView() {
                   </div>
                 ))
               )}
-            </div>
 
             {emotionEvents.length > 0 && (
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -721,41 +765,41 @@ export default function PlotView() {
           </div>
         )}
 
-        {/* ===== 章节目录 ===== */}
+        {/* ===== 章节目录（问题6：显示字数和状态） ===== */}
         {activeTab === 'chapters' && (
           <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <span style={{ color: '#888', fontSize: '13px' }}>共 {chapters.length} 章</span>
+              <span style={{ color: '#666', fontSize: '12px' }}>
+                总字数：{chapters.reduce((sum, c) => sum + (c.wordCount || 0), 0)}
+              </span>
+            </div>
+
             {chapters.length === 0 ? (
               <p style={{ color: '#666', textAlign: 'center', padding: '80px 0' }}>暂无章节，请使用长篇规划生成</p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {chapters.map((ch, idx) => (
-                  <div
-                    key={ch.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
-                      padding: '12px 16px',
-                      background: '#0f0f0f',
-                      borderRadius: '8px',
-                      border: '1px solid #2a2a2a',
-                    }}
-                  >
-                    <span style={{ color: '#6366f1', fontWeight: 600, fontSize: '13px', minWidth: '60px' }}>
+                  <div key={ch.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', background: '#0f0f0f', borderRadius: '8px', border: '1px solid #2a2a2a' }}>
+                    <span style={{ color: '#6366f1', fontWeight: 700, fontSize: '13px', minWidth: '60px' }}>
                       第{idx + 1}章
                     </span>
-                    <span style={{ color: '#fff', fontSize: '14px', flex: 1 }}>{ch.title}</span>
-                    <span
-                      style={{
-                        padding: '2px 10px',
-                        borderRadius: '6px',
-                        fontSize: '12px',
-                        background: ch.status === 'completed' ? 'rgba(34,197,94,0.15)' : 'rgba(234,179,8,0.15)',
-                        color: ch.status === 'completed' ? '#4ade80' : '#facc15',
-                      }}
-                    >
-                      {ch.status || '草稿'}
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: '14px', fontWeight: 500, color: '#fff' }}>{ch.title}</div>
+                      <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>{ch.summary}</div>
+                    </div>
+                    <span style={{
+                      padding: '2px 10px',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      background: ch.status === 'completed' ? 'rgba(34,197,94,0.15)' : ch.status === 'polished' ? 'rgba(99,102,241,0.15)' : 'rgba(234,179,8,0.15)',
+                      color: ch.status === 'completed' ? '#4ade80' : ch.status === 'polished' ? '#818cf8' : '#facc15'
+                    }}>
+                      {ch.status === 'completed' ? '完成' : ch.status === 'polished' ? '已润色' : '草稿'}
                     </span>
+                    {ch.wordCount > 0 && (
+                      <span style={{ fontSize: '12px', color: '#666' }}>{ch.wordCount}字</span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -763,7 +807,7 @@ export default function PlotView() {
           </div>
         )}
 
-        {/* ===== 关系图谱（已实装） ===== */}
+        {/* ===== 关系图谱（问题7：角色类型区分主角/配角/反派颜色） ===== */}
         {activeTab === 'graph' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -782,8 +826,40 @@ export default function PlotView() {
             ) : (
               <div style={{ height: '520px', border: '1px solid #2a2a2a', borderRadius: '10px', overflow: 'hidden' }}>
                 <ReactFlow
-                  nodes={rfNodes}
-                  edges={rfEdges}
+                  nodes={characters.map((char, i) => ({
+                    id: char.id,
+                    data: { label: char.name },
+                    position: { x: 100 + (i % 4) * 200, y: 100 + Math.floor(i / 4) * 150 },
+                    style: {
+                      background: char.roleType === 'protagonist' ? 'rgba(99,102,241,0.25)' :
+                                 char.roleType === 'antagonist' ? 'rgba(239,68,68,0.25)' :
+                                 'rgba(168,85,247,0.2)',
+                      color: '#e0e0e0',
+                      border: '2px solid ' + (char.roleType === 'protagonist' ? '#6366f1' :
+                                              char.roleType === 'antagonist' ? '#ef4444' :
+                                              '#a855f7'),
+                      borderRadius: '10px',
+                      padding: '12px 20px',
+                      fontSize: '14px',
+                      fontWeight: 700,
+                      minWidth: '120px',
+                      textAlign: 'center' as const,
+                      boxShadow: '0 0 12px rgba(0,0,0,0.3)',
+                    },
+                  }))}
+                  edges={characters.flatMap((char) =>
+                    (char.relationships || [])
+                      .filter((rel: any) => characters.some((c) => c.id === rel.targetId))
+                      .map((rel: any) => ({
+                        id: `e-${char.id}-${rel.targetId}`,
+                        source: char.id,
+                        target: rel.targetId,
+                        label: rel.type || '关系',
+                        labelStyle: { fill: '#888', fontSize: 12 },
+                        style: { stroke: '#6366f1', strokeWidth: 2 },
+                        animated: true,
+                      }))
+                  )}
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
                   onConnect={onConnect}
@@ -794,7 +870,12 @@ export default function PlotView() {
                   <Controls style={{ background: '#1a1a1a', color: '#e0e0e0' }} />
                   <MiniMap
                     style={{ background: '#1a1a1a' }}
-                    nodeColor={(n: any) => (n.style?.background?.includes('99,102,241') ? '#6366f1' : '#a855f7')}
+                    nodeColor={(n: any) => {
+                      const char = characters.find((c) => c.id === n.id)
+                      return char?.roleType === 'protagonist' ? '#6366f1' :
+                             char?.roleType === 'antagonist' ? '#ef4444' :
+                             '#a855f7'
+                    }}
                     maskColor="rgba(15,15,15,0.7)"
                   />
                 </ReactFlow>

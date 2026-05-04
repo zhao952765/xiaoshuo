@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import PageWrapper from '../../components/PageWrapper'
 import { useStore } from '../../store'
-import { TAG_CATEGORY_CONFIG, PRESET_TAG_GROUPS, offlineExpand } from '../../constants/tagPrompts'
+import { TAG_CATEGORY_CONFIG, PRESET_TAG_GROUPS, offlineExpand, autoDetectCategory } from '../../constants/tagPrompts'
 import type { TagCategory } from '../../../config/types'
 
 export default function Tags() {
@@ -13,6 +13,10 @@ export default function Tags() {
   const toggleTagSelection = useStore((s) => s.toggleTagSelection)
   const clearSelection = useStore((s) => s.clearSelection)
   const addLog = useStore((s) => s.addLog)
+  const currentNovel = useStore((s) => s.currentNovel)
+  const updateNovel = useStore((s) => s.updateNovel)
+  const removeTagsBatch = useStore((s) => s.removeTagsBatch)
+  const clearAllTags = useStore((s) => s.clearAllTags)
 
   const [showModal, setShowModal] = useState(false)
   const [showPresets, setShowPresets] = useState(false)
@@ -23,8 +27,48 @@ export default function Tags() {
   const [expansionResult, setExpansionResult] = useState<Record<TagCategory, string[]> | null>(null)
   const [isExpanding, setIsExpanding] = useState(false)
   const [copiedLabel, setCopiedLabel] = useState<string | null>(null)
+  const [hoveredTagId, setHoveredTagId] = useState<string | null>(null)
 
   const [form, setForm] = useState({ name: '', category: 'character' as TagCategory, color: '#8b5cf6' })
+
+  // ===== 批量操作状态 =====
+  const [batchMode, setBatchMode] = useState(false)
+  const [batchSelectedIds, setBatchSelectedIds] = useState<string[]>([])
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [showClearAllConfirm, setShowClearAllConfirm] = useState(false)
+
+  // 退出批量模式时清空选择
+  const toggleBatchMode = () => {
+    if (batchMode) {
+      setBatchSelectedIds([])
+      setBatchMode(false)
+    } else {
+      setBatchMode(true)
+    }
+  }
+
+  const toggleBatchSelect = (id: string) => {
+    setBatchSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id])
+  }
+
+  const selectAll = () => setBatchSelectedIds(filteredTags.map(t => t.id))
+  const deselectAll = () => setBatchSelectedIds([])
+
+  const handleBatchDelete = () => {
+    removeTagsBatch(batchSelectedIds)
+    addLog({ type: 'info', message: `已批量删除 ${batchSelectedIds.length} 个标签`, detail: null })
+    setBatchSelectedIds([])
+    setShowDeleteConfirm(false)
+  }
+
+  const handleClearAll = () => {
+    const count = tags.length
+    clearAllTags()
+    addLog({ type: 'warn', message: `已清空全部 ${count} 个标签`, detail: null })
+    setBatchSelectedIds([])
+    setShowClearAllConfirm(false)
+    setBatchMode(false)
+  }
 
   const categoryEntries = Object.entries(TAG_CATEGORY_CONFIG) as [TagCategory, typeof TAG_CATEGORY_CONFIG[TagCategory]][]
 
@@ -93,17 +137,7 @@ export default function Tags() {
     setShowPresets(false)
   }
 
-  const autoDetectCategory = (tagName: string): TagCategory => {
-    const name = tagName.toLowerCase()
-    if (['高h', '肉戏', '黑丝', '潮吹', '高潮', '失禁', '深喉', '颜射', '中出', '后入', '露出', '强制', '媚药'].some(k => name.includes(k))) return 'fetish'
-    if (['制服', '护士', '空姐', '女仆', '丝袜', '高跟鞋', '蕾丝', '情趣', '丁字'].some(k => name.includes(k))) return 'costume'
-    if (['时停', '催眠', '梦境', '触手', '露出', '怪物'].some(k => name.includes(k))) return 'fantasy'
-    if (['总裁', '秘书', 'ol', '医生', '护士', '空姐', '教师', '律师', '主播', '模特', '警'].some(k => name.includes(k))) return 'profession'
-    if (['办公室', '会议室', '电梯', '停车场', '酒店', '校园', '图书馆', '浴室', '厨房', '豪车'].some(k => name.includes(k))) return 'scene'
-    if (['ntr', '禁忌', '偷情', '师生', '强取', '调教', '黑化', '旧情', '恨爱'].some(k => name.includes(k))) return 'plot'
-    if (['御姐', '总裁', '上司', '贤妻', '婊', '病娇', '腹黑', '萝', '妻', '妇', '小姐', '冰山', '姐姐'].some(k => name.includes(k))) return 'character'
-    return 'character'
-  }
+
 
   // 复制
   const handleCopy = async (tagNames: string[], label: string) => {
@@ -114,16 +148,105 @@ export default function Tags() {
     } catch { }
   }
 
-  // 导出
-  const handleExport = () => {
-    const data = { tags, selectedTags: selectedTags.map((t) => t.name), favorites: favoriteTags.map((t) => t.name), exportedAt: new Date().toISOString() }
+  // ===== 导出 / 导入 =====
+
+  // 导出 JSON（方便文本编辑器编辑）
+  const exportTagsJson = () => {
+    const data = {
+      exportDate: new Date().toISOString(),
+      totalTags: tags.length,
+      tags: tags.map(t => ({
+        name: t.name,
+        category: t.category,
+        color: t.color,
+      }))
+    }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `tags_${Date.now()}.json`
+    a.download = `tags_export_${Date.now()}.json`
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  // 导出 CSV（按类型分类，方便 Excel 编辑）
+  const exportTagsCsv = () => {
+    const csvEscape = (val: string) => val.includes(',') || val.includes('"') ? `"${val.replace(/"/g, '""')}"` : val
+    const lines: string[] = ['名称,分类,颜色']
+
+    // 按 categoryEntries 顺序分组输出
+    for (const [cat, config] of categoryEntries) {
+      const catTags = tags.filter(t => t.category === cat)
+      if (catTags.length === 0) continue
+      // 分类标题行（注释，Excel 中可见）
+      lines.push(`# ${config.icon} ${config.label}（${catTags.length} 个标签）`)
+      catTags.forEach(t => {
+        lines.push([csvEscape(t.name), t.category, t.color].join(','))
+      })
+      lines.push('') // 空行分隔
+    }
+
+    const csv = lines.join('\n')
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `tags_export_${Date.now()}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // 导入 JSON / CSV（自动去重）
+  const importTags = (file: File) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string
+        let importedTags: any[] = []
+
+        if (file.name.endsWith('.json')) {
+          const data = JSON.parse(text)
+          importedTags = data.tags || []
+        } else if (file.name.endsWith('.csv')) {
+          const lines = text.split('\n')
+            .map(l => l.trim())
+            .filter(l => l && !l.startsWith('#')) // 跳过空行和注释行（分类标题）
+          // 跳过首行(表头)，从第2行开始解析
+          importedTags = lines.slice(1).map(line => {
+            const cols = line.split(',')
+            return {
+              name: cols[0]?.trim(),
+              category: cols[1]?.trim() as TagCategory,
+              color: cols[2]?.trim(),
+            }
+          })
+        }
+
+        // 合并到现有标签（去重）
+        const existingNames = new Set(tags.map(t => t.name))
+        const newTags = importedTags
+          .filter((t: any) => t.name && !existingNames.has(t.name))
+          .map((t: any) => ({
+            id: Date.now().toString() + Math.random().toString(36).slice(2, 7),
+            name: t.name,
+            category: t.category && TAG_CATEGORY_CONFIG[t.category as TagCategory]
+              ? (t.category as TagCategory)
+              : 'character' as TagCategory,
+            color: t.color && /^#[0-9a-f]{6}$/i.test(t.color) ? t.color : '#6366f1',
+            isFavorite: false,
+            createdAt: Date.now(),
+          }))
+
+        // 添加到 store
+        newTags.forEach((tag: any) => addTag(tag))
+
+        alert(`成功导入 ${newTags.length} 个新标签` + (importedTags.length - newTags.length > 0 ? `，${importedTags.length - newTags.length} 个已存在的标签已跳过` : ''))
+      } catch (err) {
+        alert('导入失败：文件格式错误，请检查文件内容')
+      }
+    }
+    reader.readAsText(file)
   }
 
   // 统计
@@ -147,9 +270,16 @@ export default function Tags() {
       subtitle="成人情色小说专用 · 7大分类 · 智能识别"
       actions={
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button onClick={handleExport} style={{ padding: '8px 16px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', cursor: 'pointer' }}>
-            📥 导出
+          <button onClick={exportTagsJson} style={{ padding: '8px 16px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', cursor: 'pointer' }}>
+            📤 导出JSON
           </button>
+          <button onClick={exportTagsCsv} style={{ padding: '8px 16px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', cursor: 'pointer' }}>
+            📊 导出CSV
+          </button>
+          <label style={{ padding: '8px 16px', background: '#6366f1', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '14px', cursor: 'pointer', display: 'inline-block' }}>
+            📥 导入
+            <input type="file" accept=".json,.csv" onChange={(e) => e.target.files?.[0] && importTags(e.target.files[0])} style={{ display: 'none' }} />
+          </label>
           <button onClick={() => setShowPresets(!showPresets)} style={{ padding: '8px 16px', background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: '8px', color: '#8b5cf6', fontSize: '14px', cursor: 'pointer' }}>
             💡 预设模板
           </button>
@@ -255,6 +385,68 @@ export default function Tags() {
         </div>
       </div>
 
+      {/* ===== 批量操作工具栏 ===== */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0' }}>
+        <button
+          onClick={toggleBatchMode}
+          style={{
+            padding: '8px 18px',
+            borderRadius: '8px',
+            fontSize: '14px',
+            cursor: 'pointer',
+            border: `1px solid ${batchMode ? 'rgba(239,68,68,0.3)' : '#333'}`,
+            background: batchMode ? 'rgba(239,68,68,0.1)' : '#1a1a1a',
+            color: batchMode ? '#ef4444' : '#e0e0e0',
+          }}
+        >
+          {batchMode ? '❌ 退出批量选择' : '☑️ 批量选择'}
+        </button>
+
+        {batchMode && (
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <span style={{ color: '#888', fontSize: '13px' }}>已选择 {batchSelectedIds.length} 个</span>
+            {batchSelectedIds.length === filteredTags.length ? (
+              <button onClick={deselectAll} style={{ fontSize: '12px', color: '#818cf8', background: 'transparent', border: 'none', cursor: 'pointer' }}>
+                取消全选
+              </button>
+            ) : (
+              <button onClick={selectAll} style={{ fontSize: '12px', color: '#818cf8', background: 'transparent', border: 'none', cursor: 'pointer' }}>
+                全选
+              </button>
+            )}
+            <button
+              onClick={() => batchSelectedIds.length > 0 && setShowDeleteConfirm(true)}
+              disabled={batchSelectedIds.length === 0}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '6px',
+                fontSize: '13px',
+                cursor: batchSelectedIds.length === 0 ? 'not-allowed' : 'pointer',
+                border: '1px solid rgba(239,68,68,0.3)',
+                background: batchSelectedIds.length === 0 ? '#1a1a1a' : 'rgba(239,68,68,0.15)',
+                color: batchSelectedIds.length === 0 ? '#555' : '#ef4444',
+              }}
+            >
+              🗑 批量删除
+            </button>
+            <button
+              onClick={() => setShowClearAllConfirm(true)}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '6px',
+                fontSize: '13px',
+                cursor: 'pointer',
+                border: '1px solid rgba(239,68,68,0.3)',
+                background: 'rgba(239,68,68,0.15)',
+                color: '#ef4444',
+              }}
+            >
+              🗑 清空全部
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* 扩展结果预览 */}
       {expansionResult && (
         <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '12px', padding: '16px' }}>
@@ -303,6 +495,16 @@ export default function Tags() {
                 {copiedLabel === 'selected' ? '✓ 已复制' : '📋 复制'}
               </button>
               <button onClick={clearSelection} style={{ fontSize: '12px', color: '#ef4444', background: 'transparent', border: 'none', cursor: 'pointer' }}>🗑 清空</button>
+              <button
+                onClick={() => {
+                  if (!currentNovel) return
+                  const selectedTags = tags.filter((t) => selectedTagIds.includes(t.id))
+                  updateNovel({ tags: selectedTags.map((t) => t.name) })
+                }}
+                style={{ fontSize: '12px', color: '#6366f1', background: 'transparent', border: 'none', cursor: 'pointer', fontWeight: 500 }}
+              >
+                💾 保存选中标签到项目
+              </button>
             </div>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
@@ -377,23 +579,54 @@ export default function Tags() {
                     return (
                       <span
                         key={tag.id}
-                        onClick={() => toggleTagSelection(tag.id)}
+                        onMouseEnter={() => setHoveredTagId(tag.id)}
+                        onMouseLeave={() => setHoveredTagId(null)}
+                        onClick={() => batchMode ? toggleBatchSelect(tag.id) : toggleTagSelection(tag.id)}
                         style={{
                           padding: '8px 14px', borderRadius: '10px', fontSize: '14px', cursor: 'pointer',
-                          border: `1px solid ${isSelected ? (isFetish ? 'rgba(236,72,153,0.5)' : `${config.color}50`) : (isFetish ? 'rgba(236,72,153,0.2)' : 'rgba(255,255,255,0.08)')}`,
-                          color: isSelected ? (isFetish ? '#f472b6' : config.color) : '#a0a0a0',
-                          background: isSelected ? (isFetish ? 'rgba(236,72,153,0.12)' : `${config.color}10`) : '#0f0f0f',
-                          boxShadow: isSelected && isFetish ? '0 0 12px rgba(236,72,153,0.3)' : 'none',
+                          border: `1px solid ${isSelected || batchSelectedIds.includes(tag.id) ? (isFetish ? 'rgba(236,72,153,0.5)' : `${config.color}50`) : (isFetish ? 'rgba(236,72,153,0.2)' : 'rgba(255,255,255,0.08)')}`,
+                          color: isSelected || batchSelectedIds.includes(tag.id) ? (isFetish ? '#f472b6' : config.color) : '#a0a0a0',
+                          background: isSelected || batchSelectedIds.includes(tag.id) ? (isFetish ? 'rgba(236,72,153,0.12)' : `${config.color}10`) : '#0f0f0f',
+                          boxShadow: isSelected || batchSelectedIds.includes(tag.id) ? '0 0 12px rgba(236,72,153,0.3)' : 'none',
                           display: 'flex', alignItems: 'center', gap: '6px',
-                          transition: 'all 0.2s'
+                          transition: 'all 0.2s',
+                          position: 'relative',
                         }}
                       >
-                        {isSelected && '✓'}
+                        {/* 批量模式：复选框 */}
+                        {batchMode && (
+                          <span style={{
+                            width: '16px', height: '16px', borderRadius: '4px',
+                            border: `2px solid ${batchSelectedIds.includes(tag.id) ? config.color : '#555'}`,
+                            background: batchSelectedIds.includes(tag.id) ? config.color : 'transparent',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: '10px', color: '#fff', flexShrink: 0,
+                          }}>
+                            {batchSelectedIds.includes(tag.id) && '✓'}
+                          </span>
+                        )}
+                        {!batchMode && isSelected && '✓'}
                         {tag.name}
                         <span onClick={(e) => { e.stopPropagation(); toggleTagFavorite(tag.id) }} style={{ cursor: 'pointer', fontSize: '13px' }}>
                           {tag.isFavorite ? '⭐' : '☆'}
                         </span>
-                        <span onClick={(e) => { e.stopPropagation(); removeTag(tag.id) }} style={{ cursor: 'pointer', fontSize: '13px', color: '#ef4444', marginLeft: '2px' }}>×</span>
+                        {/* 非批量模式：悬停显示删除按钮 */}
+                        {!batchMode && hoveredTagId === tag.id && (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              removeTag(tag.id)
+                              addLog({ type: 'info', message: `已删除标签：${tag.name}`, detail: null })
+                            }}
+                            style={{
+                              cursor: 'pointer', fontSize: '12px', color: '#ef4444',
+                              background: 'rgba(239,68,68,0.15)', borderRadius: '4px',
+                              padding: '0 5px', lineHeight: '18px',
+                            }}
+                          >
+                            ×
+                          </span>
+                        )}
                       </span>
                     )
                   })
@@ -403,6 +636,67 @@ export default function Tags() {
           )
         })}
       </div>
+
+      {/* ===== 批量删除确认对话框 ===== */}
+      {showDeleteConfirm && (
+        <>
+          <div onClick={() => setShowDeleteConfirm(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100 }} />
+          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '380px', background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '14px', padding: '24px', zIndex: 101 }}>
+            <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+              <div style={{ fontSize: '40px', marginBottom: '12px' }}>🗑️</div>
+              <h3 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: 600, color: '#fff' }}>确认删除</h3>
+              <p style={{ color: '#888', fontSize: '14px', lineHeight: 1.5 }}>
+                确定要删除选中的 <span style={{ color: '#ef4444', fontWeight: 600 }}>{batchSelectedIds.length}</span> 个标签吗？
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                style={{ flex: 1, padding: '12px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', cursor: 'pointer' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={handleBatchDelete}
+                style={{ flex: 1, padding: '12px', background: '#ef4444', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '14px', cursor: 'pointer', fontWeight: 500 }}
+              >
+                确认删除
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ===== 清空全部确认对话框 ===== */}
+      {showClearAllConfirm && (
+        <>
+          <div onClick={() => setShowClearAllConfirm(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100 }} />
+          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '380px', background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '14px', padding: '24px', zIndex: 101 }}>
+            <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+              <div style={{ fontSize: '40px', marginBottom: '12px' }}>⚠️</div>
+              <h3 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: 600, color: '#fff' }}>清空全部标签</h3>
+              <p style={{ color: '#f87171', fontSize: '14px', lineHeight: 1.5 }}>
+                确定要删除全部 <span style={{ color: '#ef4444', fontWeight: 600 }}>{tags.length}</span> 个标签？<br />
+                <span style={{ color: '#facc15' }}>此操作不可撤销！</span>
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                onClick={() => setShowClearAllConfirm(false)}
+                style={{ flex: 1, padding: '12px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', cursor: 'pointer' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={handleClearAll}
+                style={{ flex: 1, padding: '12px', background: '#dc2626', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '14px', cursor: 'pointer', fontWeight: 500 }}
+              >
+                确认清空
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* 新建标签弹窗 */}
       {showModal && (
