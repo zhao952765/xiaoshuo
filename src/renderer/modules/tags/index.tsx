@@ -103,7 +103,7 @@ export default function Tags() {
         const exists = tags.find((t) => t.name === name && t.category === category)
         if (!exists) {
           const id = Date.now().toString() + Math.random().toString(36).substr(2, 5)
-          addTag({ id, name, category: category as TagCategory, color: TAG_CATEGORY_CONFIG[category as TagCategory].color, isFavorite: false, createdAt: Date.now() })
+          addTag({ id, name, category: category as TagCategory, color: normalizeColor(TAG_CATEGORY_CONFIG[category as TagCategory].color), isFavorite: false, createdAt: Date.now() })
           if (autoSelect) newIds.push(id)
         } else if (autoSelect) {
           newIds.push(exists.id)
@@ -257,9 +257,17 @@ export default function Tags() {
     { label: '分类', count: categoryEntries.length, color: '#10b981', icon: '📂' },
   ]
 
+  // 颜色格式化：简写 #63f → #6366ff，非法值用默认
+  const normalizeColor = (color: string, fallback = '#6366f1') => {
+    if (!color || !color.startsWith('#')) return fallback
+    if (color.length === 4) return '#' + color[1] + color[1] + color[2] + color[2] + color[3] + color[3]
+    if (/^#[0-9a-f]{6}$/i.test(color)) return color
+    return fallback
+  }
+
   const saveCustom = () => {
     if (!form.name.trim()) return
-    addTag({ id: Date.now().toString(), name: form.name.trim(), category: form.category, color: form.color, isFavorite: false, createdAt: Date.now() })
+    addTag({ id: Date.now().toString(), name: form.name.trim(), category: form.category, color: normalizeColor(form.color), isFavorite: false, createdAt: Date.now() })
     setForm({ name: '', category: 'character', color: '#8b5cf6' })
     setShowModal(false)
   }
@@ -575,7 +583,6 @@ export default function Tags() {
                 ) : (
                   catTags.map((tag) => {
                     const isSelected = selectedTagIds.includes(tag.id)
-                    const isFetish = cat === 'fetish'
                     return (
                       <span
                         key={tag.id}
@@ -584,10 +591,10 @@ export default function Tags() {
                         onClick={() => batchMode ? toggleBatchSelect(tag.id) : toggleTagSelection(tag.id)}
                         style={{
                           padding: '8px 14px', borderRadius: '10px', fontSize: '14px', cursor: 'pointer',
-                          border: `1px solid ${isSelected || batchSelectedIds.includes(tag.id) ? (isFetish ? 'rgba(236,72,153,0.5)' : `${config.color}50`) : (isFetish ? 'rgba(236,72,153,0.2)' : 'rgba(255,255,255,0.08)')}`,
-                          color: isSelected || batchSelectedIds.includes(tag.id) ? (isFetish ? '#f472b6' : config.color) : '#a0a0a0',
-                          background: isSelected || batchSelectedIds.includes(tag.id) ? (isFetish ? 'rgba(236,72,153,0.12)' : `${config.color}10`) : '#0f0f0f',
-                          boxShadow: isSelected || batchSelectedIds.includes(tag.id) ? '0 0 12px rgba(236,72,153,0.3)' : 'none',
+                          border: `1px solid ${isSelected || batchSelectedIds.includes(tag.id) ? `${tag.color}60` : `${tag.color}25`}`,
+                          color: isSelected || batchSelectedIds.includes(tag.id) ? tag.color : `${tag.color}cc`,
+                          backgroundColor: isSelected || batchSelectedIds.includes(tag.id) ? `${tag.color}18` : `${tag.color}08`,
+                          boxShadow: isSelected || batchSelectedIds.includes(tag.id) ? `0 0 12px ${tag.color}30` : 'none',
                           display: 'flex', alignItems: 'center', gap: '6px',
                           transition: 'all 0.2s',
                           position: 'relative',
@@ -597,8 +604,8 @@ export default function Tags() {
                         {batchMode && (
                           <span style={{
                             width: '16px', height: '16px', borderRadius: '4px',
-                            border: `2px solid ${batchSelectedIds.includes(tag.id) ? config.color : '#555'}`,
-                            background: batchSelectedIds.includes(tag.id) ? config.color : 'transparent',
+                            border: `2px solid ${batchSelectedIds.includes(tag.id) ? tag.color : '#555'}`,
+                            background: batchSelectedIds.includes(tag.id) ? tag.color : 'transparent',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                             fontSize: '10px', color: '#fff', flexShrink: 0,
                           }}>
@@ -725,6 +732,15 @@ export default function Tags() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <input type="color" value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} style={{ width: '40px', height: '40px', border: 'none', borderRadius: '8px', cursor: 'pointer' }} />
                   <span style={{ color: '#888', fontSize: '13px' }}>{form.color}</span>
+                  {/* 颜色预览 */}
+                  <span style={{
+                    padding: '4px 12px', borderRadius: '6px', fontSize: '12px',
+                    backgroundColor: form.color + '18',
+                    border: `1px solid ${form.color}40`,
+                    color: form.color,
+                  }}>
+                    {form.name || '预览'}
+                  </span>
                 </div>
               </div>
             </div>

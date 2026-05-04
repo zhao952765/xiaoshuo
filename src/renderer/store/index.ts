@@ -152,6 +152,10 @@ interface StoreActions {
   exportProject: () => Record<string, unknown>
   loadProject: (data: Record<string, unknown>) => void
   resetAll: () => void
+
+  // ========== 推导结果更新 ==========
+  updateEmotionEvents: (events: Array<{ id: string; title: string; description: string; type: 'emotion' | 'adult'; characterIds: string[]; order: number }>) => void
+  updateOutlineNodes: (nodes: Array<{ id: string; title: string; content: string; order: number }>) => void
 }
 
 const genId = (): string =>
@@ -591,20 +595,21 @@ export const useAppStore = create<StoreState & StoreActions>()(
             })),
           ]
 
-          // 生成剧情大纲节点（问题5：从 plotLine events 生成，而非章节名）
-          const outlineNodes = plotEvents.length > 0
-            ? plotEvents.slice(0, 5).map((e: any, idx: number) => ({
+          // 生成剧情大纲节点（优先从 plotLine events 生成，否则从 chapters 兜底）
+          const events = plotEvents.length > 0
+            ? plotEvents
+            : newChapters.map((ch: any, idx: number) => ({
                 id: genId(),
-                title: e.title || `剧情节点 ${idx + 1}`,
-                content: e.description || '',
+                title: ch.title || `第 ${idx + 1} 章`,
+                description: ch.summary || '',
                 order: idx,
-              }))
-            : [
-                { id: genId(), title: '第一幕 开端', content: '故事背景介绍，主角登场', order: 0 },
-                { id: genId(), title: '第二幕 发展', content: '冲突升级，矛盾激化', order: 1 },
-                { id: genId(), title: '第三幕 高潮', content: '最终对决，真相揭晓', order: 2 },
-                { id: genId(), title: '第四幕 结局', content: '尘埃落定，新的开始', order: 3 },
-              ]
+              }));
+          const outlineNodes = events.slice(0, 15).map((e: any, idx: number) => ({
+            id: e.id || genId(),
+            title: e.title || `剧情节点 ${idx + 1}`,
+            content: e.description || e.summary || '',
+            order: idx,
+          }));
 
           // 创建新的小说对象，只存储 ID 引用
           const novel: Novel = {
@@ -742,6 +747,10 @@ export const useAppStore = create<StoreState & StoreActions>()(
         })
       },
 
+      // ----- 更新推导结果 -----
+      updateEmotionEvents: (events) => set({ emotionEvents: events }),
+      updateOutlineNodes: (nodes) => set({ outlineNodes: nodes }),
+
       // ----- 重置全部 -----
       resetAll: () => set({ ...initialState }),
     }),
@@ -756,6 +765,7 @@ export const useAppStore = create<StoreState & StoreActions>()(
         plotLines: state.plotLines,
         tags: state.tags,
         memories: state.memories,
+        logs: state.logs,
         aiModels: state.aiModels,
         currentModel: state.currentModel,
         adultMode: state.adultMode,
@@ -769,6 +779,7 @@ export const useAppStore = create<StoreState & StoreActions>()(
         defaultTemperature: state.defaultTemperature,
         defaultMaxTokens: state.defaultMaxTokens,
         apiTimeout: state.apiTimeout,
+        deduceTask: state.deduceTask,
       }),
     }
   )

@@ -21,17 +21,19 @@ export default function PlotView() {
   const chapters = useStore((s) => s.chapters)
   const worlds = useStore((s) => s.worldSettings)
   const updateNovel = useStore((s) => s.updateNovel)
+  const updateEmotionEvents = useStore((s) => s.updateEmotionEvents)
+  const updateOutlineNodes = useStore((s) => s.updateOutlineNodes)
   const adultMode = useStore((s) => s.adultMode)
 
   // 从根状态读取，不依赖 novel 嵌套字段
-  const storeEmotionEvents = useStore((s) => (s as any).emotionEvents || [])
-  const storeOutlineNodes = useStore((s) => (s as any).outlineNodes || [])
+  const storeEmotionEvents = useStore((s) => s.emotionEvents || [])
+  const storeOutlineNodes = useStore((s) => s.outlineNodes || [])
 
   const [editTitle, setEditTitle] = useState(novel?.title || '')
   const [editSummary, setEditSummary] = useState(novel?.summary || '')
 
   // ========== 剧情大纲状态 ==========
-  const [outlineNodes, setOutlineNodes] = useState<Array<{ id: string; title: string; content: string }>>(
+  const [outlineNodes, setOutlineNodes] = useState<Array<{ id: string; title: string; content: string; order: number }>>(
     storeOutlineNodes || []
   )
 
@@ -42,6 +44,7 @@ export default function PlotView() {
     description: string
     type: 'emotion' | 'adult'
     characterIds: string[]
+    order: number
   }>>(storeEmotionEvents || [])
 
   // 只在 novel 对象变化时（推导完成/切换项目）同步一次数据
@@ -55,14 +58,16 @@ export default function PlotView() {
   }, [novelId])
 
   const saveSummary = () => {
-    updateNovel({ title: editTitle, summary: editSummary, outlineNodes, emotionEvents } as any)
+    updateNovel({ title: editTitle, summary: editSummary })
+    updateEmotionEvents(emotionEvents)
+    updateOutlineNodes(outlineNodes)
   }
 
   // ========== 剧情大纲操作 ==========
   const addOutlineNode = () => {
     setOutlineNodes((prev) => [
       ...prev,
-      { id: Date.now().toString(), title: '', content: '' },
+      { id: Date.now().toString(), title: '', content: '', order: prev.length },
     ])
   }
 
@@ -371,7 +376,8 @@ export default function PlotView() {
                       title: '',
                       description: '',
                       type: 'emotion',
-                      characterIds: []
+                      characterIds: [],
+                      order: prev.length
                     }])
                   }}
                   style={{

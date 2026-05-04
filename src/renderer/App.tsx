@@ -19,12 +19,59 @@ import Logs from './pages/logs'
 import Settings from './pages/settings'
 
 function App() {
-  const validateCurrentModel = useStore((s) => s.validateCurrentModel)
+  const validateCurrentModel = useStore((s) => s.validateCurrentModel);
 
   useEffect(() => {
-    // 启动时校验 AI 模型状态：持久化的 currentModel 若不存在则自动选第一个
-    validateCurrentModel()
-  }, [])
+    // 启动时校验 AI 模型状态
+    validateCurrentModel();
+    // 修复：如果 deduceTask 持久化了 isRunning=true（上次推导被中断），重置为失败状态
+    const task = useStore.getState().deduceTask;
+    if (task?.isRunning) {
+      useStore.getState().failDeduceTask('上次推导已被中断，请重新开始');
+    }
+  }, []);
+
+  useEffect(() => {
+    // 退出/刷新/关闭窗口前强制持久化所有数据
+    const handleBeforeUnload = () => {
+      try {
+        // zustand persist 自动同步到 localStorage，这里确保最后一次变更已写入
+        const state = useStore.getState();
+        localStorage.setItem('private-novel-studio-pro-storage', JSON.stringify({
+          state: {
+            currentNovel: state.currentNovel,
+            characters: state.characters,
+            worldSettings: state.worldSettings,
+            chapters: state.chapters,
+            volumes: state.volumes,
+            plotLines: state.plotLines,
+            tags: state.tags,
+            memories: state.memories,
+            logs: state.logs,
+            aiModels: state.aiModels,
+            currentModel: state.currentModel,
+            adultMode: state.adultMode,
+            conversations: state.conversations,
+            emotionEvents: state.emotionEvents,
+            outlineNodes: state.outlineNodes,
+            selectedTagIds: state.selectedTagIds,
+            fontSize: state.fontSize,
+            autoSaveInterval: state.autoSaveInterval,
+            autoBackup: state.autoBackup,
+            defaultTemperature: state.defaultTemperature,
+            defaultMaxTokens: state.defaultMaxTokens,
+            apiTimeout: state.apiTimeout,
+            deduceTask: state.deduceTask,
+          },
+          version: 0,
+        }));
+      } catch (e) {
+        console.error('保存数据时出错:', e);
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
 
   return (
     <HashRouter>
