@@ -1,888 +1,1514 @@
-import { useState, useRef, useEffect } from 'react'
+/**
+ * 一键推导页面 — 全面重写版
+ *
+ * 升级内容：
+ * - Framer Motion 进场/退场动画
+ * - 标准/成人模式切换（带图标+颜色）
+ * - 主题模板面板（6组预设）
+ * - 5档长度可视化卡片
+ * - 角色数量 +/- 按钮组
+ * - 流式输出打字机光标+实时字数
+ * - 结果双视图（卡片/文档）
+ * - 可展开卡片（复制/编辑/导出/展开）
+ * - handleSave 修复：requestAnimationFrame + 合并首章
+ */
+
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { motion, AnimatePresence } from 'framer-motion'
 import { useAppStore } from '../../store'
 import PageWrapper from '../../components/PageWrapper'
 import { loadPrompt } from '../../utils/promptLoader'
-import { PRESET_TAG_GROUPS } from '../../constants/tagPrompts'
-import type { AIModel } from '../../../config/types'
+import { mapOldResultToCurrent } from '../../utils/deduceTransformer'
+import type {
+  AIModel,
+  OneClickResult,
+  NovelLength,
+} from '../../../config/types'
+import {
+  LENGTH_OPTIONS,
+  LENGTH_LABEL_MAP,
+  CHAPTER_COUNT_MAP,
+  THEME_TEMPLATES,
+  RESULT_FIELDS,
+  getProgressPhase,
+  FEATURE_CARDS,
+} from './constants'
 
-async function callAIModelStream(model: AIModel, systemPrompt: string, userPrompt: string, onChunk: (text: string) => void): Promise<string> {
+// ==========================================
+// 动画配置
+// ==========================================
+
+const fadeInUp = {
+  initial: { opacity: 0, y: 20 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -10 },
+  transition: { duration: 0.3 },
+}
+
+const staggerContainer = {
+  animate: { transition: { staggerChildren: 0.06 } },
+}
+
+const staggerItem = {
+  initial: { opacity: 0, y: 12 },
+  animate: { opacity: 1, y: 0 },
+}
+
+// ==========================================
+// AI 流式调用
+// ==========================================
+
+async function callAIModelStream(
+  model: AIModel,
+  systemPrompt: string,
+  userPrompt: string,
+  onChunk: (text: string) => void,
+  signal?: AbortSignal
+): Promise<string> {
   const url = model.baseUrl.replace(/\/+$/, '') + '/chat/completions'
+
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${model.apiKey}` },
-    body: JSON.stringify({ model: model.modelId, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: model.temperature, max_tokens: model.maxTokens, stream: true }),
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${model.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: model.modelId,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: model.temperature,
+      max_tokens: model.maxTokens,
+      stream: true,
+    }),
+    signal,
   })
-  if (!res.ok) { const e = await res.text().catch(() => ''); throw new Error(`AI 请求失败 (${res.status}): ${e || res.statusText}`) }
-  const reader = res.body?.getReader(); const decoder = new TextDecoder(); let fullText = ''
-  if (!reader) throw new Error('响应流不可用')
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '')
+    throw new Error(`AI 请求失败 (${res.status}): ${errText || res.statusText}`)
+  }
+
+  const reader = res.body?.getReader()
+  const decoder = new TextDecoder()
+  let fullText = ''
+
+  if (!reader) throw new Error('响应流不可用，请检查模型配置')
+
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
     const chunk = decoder.decode(value, { stream: true })
-    for (const line of chunk.split('\n')) {
-      const t = line.trim()
-      if (!t.startsWith('data: ')) continue
-      const data = t.slice(6)
+    const lines = chunk.split('\n')
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed.startsWith('data: ')) continue
+      const data = trimmed.slice(6)
       if (data === '[DONE]') continue
-      try { const p = JSON.parse(data); const c = p.choices?.[0]?.delta?.content; if (typeof c === 'string') { fullText += c; onChunk(fullText) } } catch { }
+      try {
+        const parsed = JSON.parse(data)
+        const content = parsed.choices?.[0]?.delta?.content
+        if (typeof content === 'string') {
+          fullText += content
+          onChunk(fullText)
+        }
+      } catch {
+        // SSE 数据解析失败时安全忽略
+      }
     }
   }
+
   return fullText
 }
 
-// ===== 旧版解析逻辑（从 F:\\1\\old 移植，保持原有行为不变） =====
+// ==========================================
+// 结果字段内容提取辅助
+// ==========================================
 
-interface GenerationResult {
-  title: string;
-  synopsis: string;
-  protagonist: string;
-  supportingChars: string;
-  maleSupportingChars: string;
-  femaleSupportingChars: string;
-  worldview: string;
-  emotionalLine: string;
-  chapterOutline: string;
-  chapterList: string;
-  firstChapter: string;
+function getResultFieldContent(result: OneClickResult, key: string): { text: string; wordCount: number } {
+  let text = ''
+  switch (key) {
+    case 'title':
+      text = result.title || ''
+      break
+    case 'summary':
+      text = result.summary || ''
+      break
+    case 'protagonist':
+      text = result.protagonist
+        ? `姓名：${result.protagonist.name}\n性别：${result.protagonist.basicInfo?.gender || '未知'}\n年龄：${result.protagonist.basicInfo?.age || '未知'}\n外貌：${result.protagonist.appearance || ''}\n性格：${(result.protagonist.personality || []).join('、')}\n背景：${result.protagonist.background || ''}\n能力：${result.protagonist.abilities || ''}\n目标：${result.protagonist.arc || ''}`
+        : ''
+      break
+    case 'supporting':
+      text = (result.supporting || [])
+        .map((c, i) => `${i + 1}. ${c.name}（${c.roleType === 'antagonist' ? '反派' : '配角'}）\n   性别：${c.basicInfo?.gender || '未知'}，年龄：${c.basicInfo?.age || '未知'}\n   外貌：${c.appearance || ''}\n   性格：${(c.personality || []).join('、')}\n   背景：${c.background || ''}`)
+        .join('\n\n')
+      break
+    case 'worldview':
+      text = result.worldSetting
+        ? `概述：${result.worldSetting.overview || result.worldSetting.description || ''}\n\n规则：\n${(result.worldSetting.rules || []).map((r, i) => `${i + 1}. ${r.name}：${r.description}`).join('\n')}\n\n地点：\n${(result.worldSetting.locations || []).map((l, i) => `${i + 1}. ${l.name}（${l.type}）：${l.description}`).join('\n')}\n\n时间线：\n${(result.worldSetting.timeline || []).map((t, i) => `${i + 1}. ${t.era} - ${t.title}：${t.description}`).join('\n')}`
+        : ''
+      break
+    case 'emotionalLine':
+      text = result.plotLine?.description || ''
+      break
+    case 'chapterOutline':
+      text = result.plotLine?.events
+        ? result.plotLine.events.map((e, i: number) => `${i + 1}. ${e.title}：${e.description || ''}`).join('\n')
+        : ''
+      break
+    case 'chapterList':
+      text = (result.chapters || [])
+        .map((ch, i) => `第${i + 1}章 ${ch.title}${ch.summary ? `：${ch.summary}` : ''}`)
+        .join('\n')
+      break
+    case 'firstChapter':
+      text = result.firstChapter || ''
+      break
+    case 'meta':
+      text = `角色数：${1 + (result.supporting?.length || 0)}\n章节数：${result.chapters?.length || 0}\n首章字数：${result.firstChapter?.length || 0}\n世界观规则：${result.worldSetting?.rules?.length || 0}\n世界观地点：${result.worldSetting?.locations?.length || 0}`
+      break
+  }
+  return { text, wordCount: text.length }
 }
 
-// 解析生成结果 —— 两遍扫描法（来自旧版 CreationCenter）
-function parseGenerationResult(text: string): GenerationResult {
-  const result: GenerationResult = {
-    title: '', synopsis: '', protagonist: '',
-    supportingChars: '', maleSupportingChars: '', femaleSupportingChars: '',
-    worldview: '', emotionalLine: '',
-    chapterOutline: '', chapterList: '', firstChapter: '',
-  };
-
-  // ── 步骤1：定位字段标题行 ──
-  type FieldRule = { key: keyof GenerationResult; keywords: string[] };
-  const RULES: FieldRule[] = [
-    { key: 'title',                keywords: ['小说标题', '小说题目'] },
-    { key: 'synopsis',             keywords: ['小说简介', '故事简介', '内容简介'] },
-    { key: 'protagonist',          keywords: ['主角设定', '主角介绍'] },
-    { key: 'maleSupportingChars',  keywords: ['男配角', '男角色', '男性配角'] },
-    { key: 'femaleSupportingChars',keywords: ['女配角', '女角色', '女性配角'] },
-    { key: 'supportingChars',      keywords: ['主要配角设定', '配角设定', '其他配角', '配角介绍'] },
-    { key: 'worldview',            keywords: ['世界观与氛围', '世界观', '世界背景'] },
-    { key: 'emotionalLine',        keywords: ['感情/肉欲发展线', '情感发展线', '主要冲突线与感情', '冲突线与感情', '冲突线与情感'] },
-    { key: 'chapterOutline',       keywords: ['剧情大纲', '整体规划'] },
-    { key: 'chapterList',          keywords: ['章节目录'] },
-    { key: 'firstChapter',         keywords: ['第一章正文', '正文内容'] },
-  ];
-
-  // 判断一行是否是"字段标题行"（而非正文中提到关键字）
-  const isTitleLine = (line: string): boolean => {
-    const trimmed = line.trim();
-    return (
-      /^【/.test(trimmed) ||
-      /^#{1,4}\s/.test(trimmed) ||
-      /^\*\*/.test(trimmed) ||
-      /^\d+[.、．\s]/.test(trimmed) ||
-      /^第[一二三四五六七八九十\d]+[章节卷]/.test(trimmed) ||
-      /^[一二三四五六七八九十]+[、.．]/.test(trimmed) ||
-      trimmed.length < 25
-    );
-  };
-
-  const lines = text.split('\n');
-  const foundHeaders: { key: keyof GenerationResult; lineIdx: number }[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmedLine = line.trim();
-    if (!trimmedLine) continue;
-    if (!isTitleLine(trimmedLine)) continue;
-
-    for (const rule of RULES) {
-      const matched = rule.keywords.some(kw => trimmedLine.includes(kw));
-      if (!matched) continue;
-      if (foundHeaders.some(h => h.key === rule.key && h.lineIdx === i)) continue;
-      foundHeaders.push({ key: rule.key, lineIdx: i });
-      break;
-    }
-  }
-
-  // 后备扫描：firstChapter
-  if (!foundHeaders.some(h => h.key === 'firstChapter')) {
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line || foundHeaders.some(h => h.lineIdx === i)) continue;
-      if (/^#{1,3}\s*第一章/.test(line) || /^\*\*第一章/.test(line) ||
-          /^【第一章/.test(line) || /^第一章正文/.test(line)) {
-        foundHeaders.push({ key: 'firstChapter', lineIdx: i });
-        break;
-      }
-    }
-  }
-
-  // 后备：emotionalLine
-  if (!foundHeaders.some(h => h.key === 'emotionalLine')) {
-    const EMOTION_EXTRA_KW = ['情感发展', '感情线', '肉欲发展', '情欲发展', '冲突线', '主要冲突', '冲突设计'];
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line || !isTitleLine(line)) continue;
-      if (foundHeaders.some(h => h.lineIdx === i)) continue;
-      if (EMOTION_EXTRA_KW.some(kw => line.includes(kw))) {
-        foundHeaders.push({ key: 'emotionalLine', lineIdx: i });
-        break;
-      }
-    }
-  }
-
-  // 后备：chapterOutline
-  if (!foundHeaders.some(h => h.key === 'chapterOutline')) {
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line || !isTitleLine(line)) continue;
-      if (foundHeaders.some(h => h.lineIdx === i)) continue;
-      if (line.includes('大纲')) {
-        foundHeaders.push({ key: 'chapterOutline', lineIdx: i });
-        break;
-      }
-    }
-  }
-
-  foundHeaders.sort((a, b) => a.lineIdx - b.lineIdx);
-
-  // ── 步骤2：按区间提取内容 ──
-  for (let h = 0; h < foundHeaders.length; h++) {
-    const { key, lineIdx } = foundHeaders[h];
-    let endIdx = lines.length;
-    for (let k = h + 1; k < foundHeaders.length; k++) {
-      if (foundHeaders[k].lineIdx > lineIdx) {
-        endIdx = foundHeaders[k].lineIdx;
-        break;
-      }
-    }
-
-    const headerLine = lines[lineIdx];
-    const inlineSuffix = headerLine
-      .replace(/^[\d\s#.*（）()、\-—]+/, '')
-      .replace(/^【[^】]*】/, '')
-      .replace(/^\*\*[^*]+\*\*\s*[：:]*/, '')
-      .replace(/^[^：:]*[：:]/, '')
-      .trim();
-
-    const afterLines = lines.slice(lineIdx + 1, endIdx);
-    while (afterLines.length > 0 && !afterLines[afterLines.length - 1].trim()) afterLines.pop();
-    const afterContent = afterLines.join('\n').trim();
-
-    const parts: string[] = [];
-    if (inlineSuffix && inlineSuffix !== headerLine.trim()) parts.push(inlineSuffix);
-    if (afterContent) parts.push(afterContent);
-    const combined = parts.join('\n').trim();
-
-    if (result[key] && combined) {
-      result[key] += '\n\n' + combined;
-    } else if (combined) {
-      result[key] = combined;
-    }
-  }
-
-  // ── 步骤3：配角设定智能分配 ──
-  if (result.supportingChars && !result.maleSupportingChars && !result.femaleSupportingChars) {
-    const content = result.supportingChars;
-    const maleIdx = content.search(/男配角|男角色|男性/);
-    const femaleIdx = content.search(/女配角|女角色|女性/);
-    if (maleIdx >= 0 && femaleIdx >= 0 && maleIdx < femaleIdx) {
-      result.maleSupportingChars = content.slice(0, femaleIdx).trim();
-      result.femaleSupportingChars = content.slice(femaleIdx).trim();
-    } else if (femaleIdx >= 0 && maleIdx < 0) {
-      result.femaleSupportingChars = content;
-    } else {
-      result.maleSupportingChars = content;
-    }
-  }
-
-  // ── 步骤4：后备处理 ──
-  if (!result.chapterList) {
-    const chLines = lines
-      .map((l, i) => ({ line: l.trim(), idx: i }))
-      .filter(({ line, idx }) => {
-        if (foundHeaders.some(h => h.lineIdx === idx)) return false;
-        return /第[一二三四五六七八九十百\d]+章|^\s*\d+[.、．]/.test(line);
-      });
-    if (chLines.length > 0) {
-      result.chapterList = chLines.map(c => c.line).join('\n');
-    }
-  }
-
-  if (!Object.values(result).some(v => v.length > 0)) {
-    result.firstChapter = text;
-  }
-
-  if (!result.title) result.title = '';
-  result.title = result.title
-    .replace(/[*#【】「」《》"']/g, '')
-    .replace(/^小说标题[：:]\s*/, '')
-    .replace(/^小说题目[：:]\s*/, '')
-    .trim();
-
-  return result;
-}
-
-/**
- * 将旧版 GenerationResult 映射为当前系统所需的 DeduceInput 格式
- * （保持旧版解析逻辑不变，仅做字段名/结构转换）
- */
-function mapOldResultToCurrent(old: GenerationResult) {
-  const now = Date.now();
-
-  // 解析章节列表
-  const chapterLines = (old.chapterList || '')
-    .split('\n')
-    .map(l => l.replace(/^[\d\s\.\-、]+/, '').trim())
-    .filter(Boolean);
-  const chapters = chapterLines.length > 0
-    ? chapterLines.map(title => ({ title, summary: '' }))
-    : [{ title: '第一章', summary: '开篇' }];
-
-  // 解析配角
-  const allSupportingText = [old.maleSupportingChars, old.femaleSupportingChars, old.supportingChars]
-    .filter(Boolean).join('、');
-  const supportingNames = allSupportingText
-    .split(/[,，、;\s]+/).filter(Boolean);
-  const supporting = supportingNames.map(name => ({
-    id: `sup_${now}_${Math.random().toString(36).slice(2, 6)}`,
-    name: name.trim(), roleType: 'supporting' as const,
-    basicInfo: { age: '', gender: '', occupation: '' },
-    appearance: '', personality: [], background: '', abilities: '',
-    relationships: [], voice: '', innerWorld: '', arc: '', tags: [], avatar: '',
-    createdAt: now, updatedAt: now,
-  }));
-
-  // 主角
-  const protagonist = {
-    id: `prot_${now}`,
-    name: old.protagonist || old.title?.slice(0, 10) || '主角',
-    roleType: 'protagonist' as const,
-    avatar: '', basicInfo: { age: '', gender: '', occupation: '' },
-    appearance: '', personality: [], background: '', abilities: '',
-    relationships: [], voice: '', innerWorld: '', arc: '', tags: [],
-    createdAt: now, updatedAt: now,
-  };
-
-  // 世界观
-  const worldSetting = {
-    id: `world_${now}`, name: '世界观设定', worldType: 'custom' as const,
-    description: old.worldview?.slice(0, 200) || '', overview: old.worldview?.slice(0, 600) || '',
-    rules: [], locations: [], timeline: [],
-    society: '', culture: '', economy: '',
-    createdAt: now, updatedAt: now,
-  };
-
-  // 剧情线 events
-  const outlineLines = (old.chapterOutline || '').split('\n').filter(Boolean);
-  const plotEvents = outlineLines.length > 0
-    ? outlineLines.slice(0, 8).map((l, i) => ({
-        id: `evt_${now}_${i}`, title: l.replace(/^\d+[.、）\)]\s*/, '').trim(),
-        description: '', order: i, chapterId: null,
-      }))
-    : chapters.map((ch, i) => ({
-        id: `evt_${now}_${i}`, title: ch.title, description: ch.summary, order: i, chapterId: null,
-      }));
-
-  const plotLine = {
-    id: `plot_${now}`, type: 'main' as const, name: '主线',
-    description: old.synopsis?.slice(0, 200) || '', events: plotEvents,
-    relatedCharacters: [], createdAt: now, updatedAt: now,
-  };
-
-  return {
-    title: old.title || '未命名小说',
-    summary: old.synopsis || '',
-    firstChapter: old.firstChapter || '',
-    chapters,
-    supporting,
-    protagonist,
-    worldSetting,
-    plotLine,
-  };
-}
-
-// 统一入口：使用旧版解析逻辑，映射为当前格式
-function parseDeduceResult(aiText: string, maleCount = 1, femaleCount = 2) {
-  const oldResult = parseGenerationResult(aiText);
-  const res = mapOldResultToCurrent(oldResult);
-
-  // 根据用户设定的男女角色数调整主角与配角
-  function normGender(g: any) {
-    if (!g) return null
-    const s = String(g).toLowerCase()
-    if (s.includes('男') || s.includes('male') || s.includes('♂')) return 'male'
-    if (s.includes('女') || s.includes('female') || s.includes('♀')) return 'female'
-    return null
-  }
-
-  const desiredMale = Number(maleCount || 0)
-  const desiredFemale = Number(femaleCount || 0)
-
-  // 确定主角性别
-  let remMale = desiredMale
-  let remFemale = desiredFemale
-  const protG = normGender(res.protagonist?.basicInfo?.gender)
-  if (protG === 'male') remMale = Math.max(0, remMale - 1)
-  else if (protG === 'female') remFemale = Math.max(0, remFemale - 1)
-  else {
-    if (remMale >= remFemale && remMale > 0) { res.protagonist.basicInfo = { ...res.protagonist.basicInfo, gender: '男' }; remMale = Math.max(0, remMale - 1) }
-    else if (remFemale > 0) { res.protagonist.basicInfo = { ...res.protagonist.basicInfo, gender: '女' }; remFemale = Math.max(0, remFemale - 1) }
-  }
-
-  // 分组已有配角
-  const males: any[] = []
-  const females: any[] = []
-  let unknownChars: any[] = []
-  (res.supporting || []).forEach((s: any) => {
-    const g = normGender(s.basicInfo?.gender)
-    if (g === 'male') males.push(s)
-    else if (g === 'female') females.push(s)
-    else unknownChars.push(s)
-  })
-
-  const keepMales = males.slice(0, remMale)
-  remMale = Math.max(0, remMale - keepMales.length)
-  const keepFemales = females.slice(0, remFemale)
-  remFemale = Math.max(0, remFemale - keepFemales.length)
-
-  while ((remMale > 0 || remFemale > 0) && unknownChars.length > 0) {
-    const u = unknownChars.shift() as any
-    if (remMale > 0) { u.basicInfo = { ...u.basicInfo, gender: '男' }; keepMales.push(u); remMale-- }
-    else if (remFemale > 0) { u.basicInfo = { ...u.basicInfo, gender: '女' }; keepFemales.push(u); remFemale-- }
-  }
-
-  function makeChar(g: '男' | '女', i: number) {
-    const now2 = Date.now()
-    return {
-      id: `sup_${now2}_${Math.random().toString(36).slice(2,6)}`,
-      name: `${g}配角${now2.toString().slice(-4)}_${i}`,
-      roleType: 'supporting' as const,
-      basicInfo: { age: '', gender: g, occupation: '' },
-      appearance: '', personality: [], background: '', abilities: '',
-      relationships: [], voice: '', innerWorld: '', arc: '', tags: [], avatar: '',
-      createdAt: now2, updatedAt: now2,
-    }
-  }
-  let idx = 1
-  while (remMale > 0) { keepMales.push(makeChar('男', idx++)); remMale-- }
-  while (remFemale > 0) { keepFemales.push(makeChar('女', idx++)); remFemale-- }
-
-  res.supporting = [...keepMales, ...keepFemales]
-
-  return res
-}
+// ==========================================
+// 主组件
+// ==========================================
 
 export default function DeducePage() {
   const navigate = useNavigate()
-  const store = useAppStore()
-  const deduceTask = store.deduceTask
-  const currentModel = store.currentModel
-  const currentNovel = store.currentNovel
-  const importFromDeduce = store.importFromDeduce
-  const addLog = store.addLog
 
-  const [theme, setTheme] = useState(deduceTask?.theme || '')
-  const [maleCount, setMaleCount] = useState(deduceTask?.maleCount || 1)
-  const [femaleCount, setFemaleCount] = useState(deduceTask?.femaleCount || 2)
-  const [targetLength, setTargetLength] = useState(deduceTask?.targetLength || '30000')
-  const [showTagSelector, setShowTagSelector] = useState(false)
-  const [showFullResult, setShowFullResult] = useState(false)
+  // Store
+  const aiModels = useAppStore((s) => s.aiModels)
+  const currentModel = useAppStore((s) => s.currentModel)
+  const currentNovel = useAppStore((s) => s.currentNovel)
+  const setNovel = useAppStore((s) => s.setNovel)
+  const adultMode = useAppStore((s) => s.adultMode)
+  const toggleAdultMode = useAppStore((s) => s.toggleAdultMode)
+  const importFromDeduce = useAppStore((s) => s.importFromDeduce)
+  const addLog = useAppStore((s) => s.addLog)
+
+  // 表单状态
+  const [theme, setTheme] = useState('')
+  const [selectedModelId, setSelectedModelId] = useState(currentModel?.id ?? '')
+  const [length, setLength] = useState<NovelLength>('30000')
+  const [maleCount, setMaleCount] = useState(1)
+  const [femaleCount, setFemaleCount] = useState(2)
   const [selectedTags, setSelectedTags] = useState<string[]>([])
 
-  // 从 store 获取标签数据
-  const allTags = store.tags || []
-  const storeSelectedIds = store.selectedTagIds || []
-  const isGenerating = deduceTask?.isRunning || false
+  // 生成状态
+  const [loading, setLoading] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [progressLabel, setProgressLabel] = useState('')
+  const [streamText, setStreamText] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
-  // 初始化时将智能标签页的已选标签同步到本地状态
+  // 结果状态
+  const [result, setResult] = useState<OneClickResult | null>(null)
+  const [viewMode, setViewMode] = useState<'card' | 'doc'>('card')
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const [editingText, setEditingText] = useState('')
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
+
+  // 模板面板
+  const [showTemplates, setShowTemplates] = useState(false)
+
+  const streamRef = useRef('')
+  const resultRef = useRef<OneClickResult | null>(null)
+
+  // 同步 result 到 ref
   useEffect(() => {
-    if (storeSelectedIds.length > 0 && selectedTags.length === 0) {
-      const initialTags = allTags.filter(t => storeSelectedIds.includes(t.id)).map(t => t.name)
-      if (initialTags.length > 0) {
-        setSelectedTags(initialTags)
-      }
+    resultRef.current = result
+  }, [result])
+
+  const selectedModel = aiModels.find((m) => m.id === selectedModelId) || currentModel
+
+  // ==========================================
+  // 展开/折叠/复制/编辑 操作
+  // ==========================================
+
+  const toggleExpand = (key: string) => {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const handleCopyField = async (key: string) => {
+    if (!result) return
+    const { text } = getResultFieldContent(result, key)
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedKey(key)
+      setTimeout(() => setCopiedKey(null), 2000)
+    } catch (err) {
+      console.error('复制失败', err)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-  const deduceResult = deduceTask?.result || null
-  const deduceError = deduceTask?.error || null
-  const isSubmitting = useRef(false)
+  }
 
-  const [elapsed, setElapsed] = useState(0)
-  useEffect(() => {
-    if (!isGenerating || !deduceTask?.startTime) return
-    setElapsed(Math.floor((Date.now() - deduceTask.startTime) / 1000))
-    const timer = setInterval(() => setElapsed((p) => p + 1), 1000)
-    return () => clearInterval(timer)
-  }, [isGenerating, deduceTask?.startTime])
+  const handleStartEdit = (key: string) => {
+    if (!result) return
+    const { text } = getResultFieldContent(result, key)
+    setEditingKey(key)
+    setEditingText(text)
+  }
+
+  const handleSaveEdit = () => {
+    if (!result || !editingKey) return
+    // 根据字段将编辑内容回写到 result
+    const updated = { ...result }
+    switch (editingKey) {
+      case 'title':
+        updated.title = editingText.trim() || updated.title
+        break
+      case 'summary':
+        updated.summary = editingText
+        break
+      case 'firstChapter':
+        updated.firstChapter = editingText
+        break
+    }
+    setResult(updated)
+    setEditingKey(null)
+    setEditingText('')
+  }
+
+  const handleCancelEdit = () => {
+    setEditingKey(null)
+    setEditingText('')
+  }
+
+  const handleExportField = (key: string) => {
+    if (!result) return
+    const { text } = getResultFieldContent(result, key)
+    const field = RESULT_FIELDS.find((f) => f.key === key)
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${result.title || '小说'}_${field?.label || key}.md`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // ==========================================
+  // 推导 & 保存
+  // ==========================================
+
+  const handleDeduce = useCallback(async () => {
+    if (!theme.trim()) {
+      setError('请输入主题或关键词')
+      return
+    }
+    if (!selectedModel) {
+      setError('请先配置并选择一个 AI 模型')
+      return
+    }
+
+    setError(null)
+    setLoading(true)
+    setProgress(5)
+    setProgressLabel('正在连接 AI 模型...')
+    setStreamText('')
+    setResult(null)
+    streamRef.current = ''
+
+    const startTime = Date.now()
+
+    // 开始生成日志
+    addLog({
+      type: 'info',
+      message: '开始一键推导',
+      detail: `模型: ${selectedModel.name}, 主题: ${theme.trim()}, 长度: ${LENGTH_LABEL_MAP[length]}, 模式: ${adultMode ? '成人' : '标准'}`,
+    })
+
+    const abortController = new AbortController()
+    abortRef.current = abortController
+
+    try {
+      // ---- 加载并提取提示词 ----
+      const fullText = loadPrompt('prompts')
+      if (!fullText) {
+        throw new Error('提示词文件加载失败，请检查 prompts.md 是否存在')
+      }
+
+      // 提取系统提示词（成人模式 / 普通模式）
+      const systemPattern = adultMode
+        ? /## 系统提示词：成人情色小说专用（强烈推荐固定使用）\s*([\s\S]*?)(?=\n\s*---|\n\s*## |$)/
+        : /## 系统提示词：通用小说创作大师\s*([\s\S]*?)(?=\n\s*---|\n\s*## |$)/
+      const systemMatch = fullText.match(systemPattern)
+      const systemPrompt = systemMatch
+        ? systemMatch[1].trim()
+        : adultMode
+          ? '你是一位顶尖的中文成人情色文学作家，擅长创作极致沉浸式成人小说。'
+          : '你是一位顶级小说创作大师，精通各类小说体裁的创作技巧。'
+
+      // 提取用户提示词模板
+      const userPattern = adultMode
+        ? /## 成人情色小说 - 一键推导生成用户提示词模板\s*([\s\S]*?)(?=\n\s*---|\n\s*## 成人情色小说 - 自动续写|$)/
+        : /## 一键推导生成 - 用户提示词模板\s*([\s\S]*?)(?=\n\s*---|\n\s*## 续写提示词|$)/
+      const userMatch = fullText.match(userPattern)
+      let userTemplate = userMatch ? userMatch[1].trim() : ''
+
+      if (!userTemplate) {
+        throw new Error('未能从提示词文件中提取到用户模板')
+      }
+
+      // 变量映射
+      const vars: Record<string, string> = {
+        theme: theme.trim(),
+        length: LENGTH_LABEL_MAP[length],
+        wordCount: length,
+        maleCount: String(maleCount),
+        femaleCount: String(femaleCount),
+        chapterCount: CHAPTER_COUNT_MAP[length],
+        characterCount: String(maleCount + femaleCount),
+        modelName: selectedModel.name,
+        selectedTags: selectedTags.length > 0 ? selectedTags.join('、') : '无',
+        tagsSection: selectedTags.length > 0 ? `\n标签：${selectedTags.join('、')}` : '',
+      }
+
+      let userPrompt = userTemplate
+      for (const [key, value] of Object.entries(vars)) {
+        userPrompt = userPrompt.split(`{${key}}`).join(value)
+      }
+
+      // ---- 调用 AI 流式生成 ----
+      const fullResult = await callAIModelStream(
+        selectedModel,
+        systemPrompt,
+        userPrompt,
+        (text) => {
+          streamRef.current = text
+          const phase = getProgressPhase(text.length)
+          setProgress(phase.percent)
+          setProgressLabel(phase.label)
+          setStreamText(text)
+        },
+        abortController.signal,
+      )
+
+      // ---- 解析结果（使用 mapOldResultToCurrent）----
+      setProgress(95)
+      setProgressLabel('正在解析 AI 返回结果...')
+      const deduceInput = mapOldResultToCurrent(fullResult)
+      const parsedResult: OneClickResult = {
+        title: deduceInput.title,
+        summary: deduceInput.summary,
+        protagonist: deduceInput.protagonist,
+        supporting: deduceInput.supporting,
+        worldSetting: deduceInput.worldSetting,
+        plotLine: deduceInput.plotLine,
+        chapters: deduceInput.chapters,
+        firstChapter: deduceInput.firstChapter || '',
+      }
+
+      if (!parsedResult.title || parsedResult.title === '未命名小说') {
+        throw new Error('未能从 AI 返回中解析出有效标题，请检查模型输出格式')
+      }
+
+      setResult(parsedResult)
+      // 默认展开标题和简介
+      setExpandedKeys(new Set(['title', 'summary']))
+
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+      const totalChars = fullResult.length
+      addLog({
+        type: 'success',
+        message: `推导完成：${parsedResult.title}`,
+        detail: `字数: ${totalChars.toLocaleString()}, 耗时: ${elapsed}s, 章节: ${parsedResult.chapters.length}, 角色: ${1 + parsedResult.supporting.length}`,
+      })
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        addLog({ type: 'info', message: '用户手动停止推导', detail: '' })
+      } else {
+        const msg = err instanceof Error ? err.message : '未知错误'
+        setError(`推导失败：${msg}`)
+        addLog({ type: 'error', message: '一键推导失败', detail: msg })
+      }
+    } finally {
+      setLoading(false)
+      setProgress(100)
+      abortRef.current = null
+    }
+  }, [theme, selectedModel, adultMode, length, maleCount, femaleCount, selectedTags, addLog])
+
+  const handleStop = () => {
+    abortRef.current?.abort()
+  }
+
+  // 5.7 handleSave 修复：使用 requestAnimationFrame 确保状态已更新，合并首章内容
+  const handleSave = () => {
+    const currentResult = resultRef.current
+    if (!currentResult) return
+
+    // 使用 requestAnimationFrame 确保 React 状态已完全更新
+    requestAnimationFrame(() => {
+      const r = resultRef.current
+      if (!r) return
+
+      // 合并首章内容到 result 再导入
+      importFromDeduce(r, r.firstChapter || '')
+
+      addLog({
+        type: 'success',
+        message: `项目已保存：${r.title}`,
+        detail: `共 ${r.chapters?.length || 0} 章，${1 + (r.supporting?.length || 0)} 角色`,
+      })
+
+      setTimeout(() => {
+        navigate('/plotview')
+      }, 100)
+    })
+  }
 
   const handleReDeduce = () => {
-    if (!confirm('重新推导会覆盖当前项目的所有内容，确定吗？')) return
-    // 清空推导任务状态（包括 result/error 等所有子字段）
-    store.clearDeduceTask()
-    // 重置表单
+    if (!confirm('重新推导会清空当前所有项目数据（角色、章节、世界观等），确定吗？')) return
+    // 只重置项目相关状态，保留 AI 模型、设置、日志等全局配置
+    setNovel(null)
     setTheme('')
+    setSelectedModelId(currentModel?.id ?? '')
+    setLength('30000')
     setMaleCount(1)
     setFemaleCount(2)
-    setTargetLength('30000')
     setSelectedTags([])
-    setShowTagSelector(false)
+    setProgress(0)
+    setProgressLabel('')
+    setStreamText('')
+    setError(null)
+    setResult(null)
   }
 
-  const toggleTag = (tagName: string) => {
-    setSelectedTags(prev =>
-      prev.includes(tagName)
-        ? prev.filter(t => t !== tagName)
-        : [...prev, tagName]
-    )
-  }
+  // 计算结果总字数
+  const totalWordCount = result
+    ? RESULT_FIELDS.reduce((sum, f) => sum + getResultFieldContent(result, f.key).wordCount, 0)
+    : 0
 
-  const applyPresetTags = (preset: { name: string; tags: string[] }) => {
-    setSelectedTags(preset.tags)
-    setShowTagSelector(false)
-  }
-
-  const handleGenerate = async () => {
-    if (!theme.trim() || isSubmitting.current) return
-    isSubmitting.current = true
-    const model = currentModel
-    if (!model) { store.failDeduceTask('请先配置并选择一个 AI 模型'); isSubmitting.current = false; return }
-    store.startDeduceTask({ theme, maleCount, femaleCount, targetLength })
-    try {
-      const rawPrompt = loadPrompt('prompts')
-      if (!rawPrompt) throw new Error('提示词文件加载失败')
-      const adultMode = store.adultMode
-      const sys = rawPrompt.match(adultMode ? /## 系统提示词：成人情色小说专用（强烈推荐固定使用）\s*([\s\S]*?)(?=\n\s*---|\n\s*## |$)/ : /## 系统提示词：通用小说创作大师\s*([\s\S]*?)(?=\n\s*---|\n\s*## |$)/)
-      const systemPrompt = sys?.[1].trim() || (adultMode ? '你是一位成人情色文学作家。' : '你是一位小说创作大师。')
-      const userPtn = adultMode ? /## 成人情色小说 - 一键推导生成用户提示词模板\s*([\s\S]*?)(?=\n\s*---|$)/ : /## 一键推导生成 - 用户提示词模板\s*([\s\S]*?)(?=\n\s*---|$)/
-      const userMatch = rawPrompt.match(userPtn)
-      let template = userMatch?.[1].trim() || ''
-      if (!template) throw new Error('未能从提示词提取用户模板')
-      const labels: Record<string, string> = { '3000': '3,000字', '30000': '3万字', '100000': '10万字', '500000': '50万字', '1000000': '100万字' }
-      const chCnt: Record<string, string> = { '3000': '5-8章', '30000': '15-25章', '100000': '30-50章', '500000': '80-120章', '1000000': '150-300章' }
-      // 使用本地选择的标签
-      const selectedTagNames = selectedTags
-      const tagsSection = selectedTagNames.length > 0
-        ? `\n使用的标签（请围绕这些标签创作）：${selectedTagNames.join('、')}\n请确保故事中用到以下标签元素：\n${selectedTagNames.map(t => `- ${t}`).join('\n')}`
-        : ''
-      const vars: Record<string, string> = {
-        theme: theme.trim(), length: labels[targetLength] || '3万字', wordCount: targetLength,
-        maleCount: String(maleCount), femaleCount: String(femaleCount),
-        chapterCount: chCnt[targetLength] || '15-25章', characterCount: String(maleCount + femaleCount),
-        modelName: model.name,
-        selectedTags: selectedTagNames.length > 0 ? selectedTagNames.join('、') : '无',
-        tagsSection,
-      }
-      let userPrompt = template
-      for (const [k, v] of Object.entries(vars)) userPrompt = userPrompt.split(`{${k}}`).join(v)
-
-      const fullResult = await callAIModelStream(model, systemPrompt, userPrompt, () => {})
-      const result = parseDeduceResult(fullResult, maleCount, femaleCount)
-      store.completeDeduceTask(result)
-    } catch (err: any) {
-      store.failDeduceTask(err.message || '生成失败')
-    } finally { isSubmitting.current = false }
-  }
-
-  const handleSave = () => {
-    if (!deduceResult) return
-    importFromDeduce(deduceResult)
-    const state = useAppStore.getState()
-    const firstCh = state.chapters.slice().sort((a: any, b: any) => a.order - b.order)[0]
-    if (firstCh && deduceResult.firstChapter) store.updateChapter(firstCh.id, { content: deduceResult.firstChapter })
-    store.clearDeduceTask()
-    addLog({ type: 'success', message: `推导完成：${deduceResult.title}`, detail: '' })
-  }
-
-  const handleSaveAndView = () => { handleSave(); setTimeout(() => navigate('/plotview'), 100) }
-  const handleDiscard = () => { store.clearDeduceTask(); setTheme(''); setMaleCount(1); setFemaleCount(2); setTargetLength('30000') }
-
-  // 是否缺少模型
-  const noModel = !currentModel
-  // 渲染提示：告诉用户到底为什么按钮不可点击
-  const disabledReason = !theme.trim()
-    ? '请先输入主题'
-    : noModel
-      ? '请先去「AI模型」页面配置并选择一个模型'
-      : isGenerating
-        ? '正在生成中'
-        : ''
-
-  const btnStyle: React.CSSProperties = {
-    width: '100%', padding: '13px',
-    background: isGenerating ? '#333' : noModel ? '#555' : '#6366f1',
-    border: 'none', borderRadius: '10px',
-    color: '#fff', fontSize: '15px',
-    cursor: (isGenerating || !theme.trim()) ? 'not-allowed' : 'pointer',
-    fontWeight: 700, letterSpacing: '1px',
-  }
-
+  // ==========================================
+  // 渲染
+  // ==========================================
   return (
     <PageWrapper
       title="一键推导"
-      subtitle={currentNovel ? `当前项目：${currentNovel.title}` : '输入主题，AI 自动生成完整小说结构'}
+      subtitle={currentNovel ? `当前项目：${currentNovel.title}` : '输入主题或关键词，AI 将为你生成完整的小说结构、角色设定、世界观和章节目录'}
+      actions={
+        <motion.button
+          {...fadeInUp}
+          onClick={toggleAdultMode}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '8px 16px',
+            background: adultMode ? 'rgba(239,68,68,0.15)' : 'rgba(99,102,241,0.1)',
+            border: `1px solid ${adultMode ? 'rgba(239,68,68,0.3)' : 'rgba(99,102,241,0.2)'}`,
+            borderRadius: '8px',
+            color: adultMode ? '#ef4444' : '#6366f1',
+            fontSize: '13px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+          }}
+        >
+          {adultMode ? '🔥 成人模式' : '📖 标准模式'}
+        </motion.button>
+      }
     >
-      {/* === 顶部警告：已有项目时显示 === */}
-      {currentNovel && !isGenerating && (
-        <div style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.08), rgba(239,68,68,0.05))', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '12px', padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <span style={{ color: '#facc15', fontSize: '14px' }}>⚠️ 已有项目数据，重新推导将覆盖现有内容</span>
-          <button onClick={handleReDeduce} style={{ padding: '7px 18px', background: '#ef4444', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '13px', cursor: 'pointer', fontWeight: 600 }}>🔄 重新推导</button>
-        </div>
-      )}
-
-      {/* === 参数表单 === */}
-      <div style={{ opacity: isGenerating ? 0.5 : 1, pointerEvents: isGenerating ? 'none' : 'auto' } as React.CSSProperties}>
-        <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '14px', padding: '24px' }}>
-
-          {/* 主题输入 */}
-          <div style={{ marginBottom: '18px' }}>
-            <div style={{ color: '#aaa', fontSize: '13px', marginBottom: '8px', fontWeight: 500 }}>📝 主题 / 关键词</div>
-            <input
-              value={theme}
-              onChange={e => setTheme(e.target.value)}
-              placeholder="例如：都市异能、穿越修仙、校园恋爱..."
-              style={{ width: '100%', padding: '12px 16px', background: '#0f0f0f', border: '1px solid #333', borderRadius: '10px', color: '#e0e0e0', fontSize: '15px', outline: 'none', boxSizing: 'border-box' }}
-            />
-          </div>
-
-          {/* 角色字数三列 */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '14px', marginBottom: '18px' }}>
-            <div>
-              <div style={{ color: '#aaa', fontSize: '13px', marginBottom: '6px', fontWeight: 500 }}>♂ 男角色</div>
-              <input type="number" min={0} max={10} value={maleCount} onChange={e => setMaleCount(Math.max(0, Math.min(10, Number(e.target.value))))} style={{ width: '100%', padding: '11px 14px', background: '#0f0f0f', border: '1px solid #333', borderRadius: '10px', color: '#e0e0e0', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
-            </div>
-            <div>
-              <div style={{ color: '#aaa', fontSize: '13px', marginBottom: '6px', fontWeight: 500 }}>♀ 女角色</div>
-              <input type="number" min={0} max={10} value={femaleCount} onChange={e => setFemaleCount(Math.max(0, Math.min(10, Number(e.target.value))))} style={{ width: '100%', padding: '11px 14px', background: '#0f0f0f', border: '1px solid #333', borderRadius: '10px', color: '#e0e0e0', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
-            </div>
-            <div>
-              <div style={{ color: '#aaa', fontSize: '13px', marginBottom: '6px', fontWeight: 500 }}>📏 目标字数</div>
-              <select value={targetLength} onChange={e => setTargetLength(e.target.value)} style={{ width: '100%', padding: '11px 14px', background: '#0f0f0f', border: '1px solid #333', borderRadius: '10px', color: '#e0e0e0', fontSize: '14px', outline: 'none', boxSizing: 'border-box', cursor: 'pointer' }}>
-                <option value="30000">短篇（3万字）</option>
-                <option value="100000">中篇（10万字）</option>
-                <option value="500000">长篇（50万字）</option>
-                <option value="1000000">超长篇（100万字）</option>
-              </select>
-            </div>
-          </div>
-
-          {/* 标签选择区域 */}
-          <div style={{ marginBottom: '18px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <div style={{ color: '#aaa', fontSize: '13px', fontWeight: 500 }}>🏷️ 故事标签（可选）</div>
+      {result ? (
+        /* ========== 结果展示区域 ========== */
+        <motion.div {...fadeInUp} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {/* 视图切换 + 总字数 */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '6px' }}>
               <button
-                onClick={() => setShowTagSelector(!showTagSelector)}
-                style={{ padding: '5px 12px', background: '#333', border: '1px solid #555', borderRadius: '6px', color: '#ccc', fontSize: '12px', cursor: 'pointer' }}
+                onClick={() => setViewMode('card')}
+                style={{
+                  padding: '6px 14px',
+                  background: viewMode === 'card' ? 'rgba(99,102,241,0.15)' : 'transparent',
+                  border: `1px solid ${viewMode === 'card' ? 'rgba(99,102,241,0.3)' : '#2a2a2a'}`,
+                  borderRadius: '6px',
+                  color: viewMode === 'card' ? '#6366f1' : '#888',
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  fontWeight: 500,
+                }}
               >
-                {showTagSelector ? '▲ 收起' : '▼ 选择标签'}
+                🃏 卡片视图
+              </button>
+              <button
+                onClick={() => setViewMode('doc')}
+                style={{
+                  padding: '6px 14px',
+                  background: viewMode === 'doc' ? 'rgba(99,102,241,0.15)' : 'transparent',
+                  border: `1px solid ${viewMode === 'doc' ? 'rgba(99,102,241,0.3)' : '#2a2a2a'}`,
+                  borderRadius: '6px',
+                  color: viewMode === 'doc' ? '#6366f1' : '#888',
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  fontWeight: 500,
+                }}
+              >
+                📄 文档视图
               </button>
             </div>
+            <span style={{ fontSize: '13px', color: '#888' }}>
+              总字数 <span style={{ color: '#6366f1', fontWeight: 600 }}>{totalWordCount.toLocaleString()}</span>
+            </span>
+          </div>
 
-            {selectedTags.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
-                {selectedTags.map(tag => (
-                  <span key={tag} style={{ padding: '5px 10px', background: 'rgba(99,102,241,0.2)', border: '1px solid rgba(99,102,241,0.3)', color: '#818cf8', borderRadius: '20px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    {tag}
-                    <button onClick={() => toggleTag(tag)} style={{ background: 'none', border: 'none', color: '#818cf8', cursor: 'pointer', fontSize: '14px', padding: 0, lineHeight: 1 }}>×</button>
-                  </span>
-                ))}
-              </div>
-            )}
+          <AnimatePresence mode="wait">
+            {viewMode === 'card' ? (
+              /* ---- 卡片视图 ---- */
+              <motion.div
+                key="card"
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 10 }}
+                transition={{ duration: 0.2 }}
+                style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}
+              >
+                {RESULT_FIELDS.map((field) => {
+                  const { text, wordCount } = getResultFieldContent(result, field.key)
+                  if (!text) return null
+                  const isExpanded = expandedKeys.has(field.key)
+                  const isEditing = editingKey === field.key
+                  const isCopied = copiedKey === field.key
 
-            {showTagSelector && (
-              <div style={{ background: '#0f0f0f', border: '1px solid #333', borderRadius: '10px', padding: '14px', marginTop: '8px' }}>
-                <div style={{ marginBottom: '10px' }}>
-                  <div style={{ color: '#aaa', fontSize: '12px', marginBottom: '6px' }}>推荐组合：</div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                    {PRESET_TAG_GROUPS.slice(0, 4).map((preset: { name: string; tags: string[] }) => (
-                      <button key={preset.name} onClick={() => applyPresetTags(preset)} style={{ padding: '5px 10px', background: '#2a2a2a', border: '1px solid #444', borderRadius: '6px', color: '#ccc', fontSize: '12px', cursor: 'pointer' }}>
-                        {preset.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div style={{ maxHeight: '160px', overflowY: 'auto' }}>
-                  <div style={{ color: '#aaa', fontSize: '12px', marginBottom: '6px' }}>已有标签（最多显示50个）：</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '6px' }}>
-                    {allTags.slice(0, 50).map(tag => (
-                      <button
-                        key={tag.id}
-                        onClick={() => toggleTag(tag.name)}
+                  return (
+                    <motion.div
+                      key={field.key}
+                      {...staggerItem}
+                      style={{
+                        background: '#1a1a1a',
+                        border: `1px solid ${isExpanded ? field.color + '40' : '#2a2a2a'}`,
+                        borderRadius: '10px',
+                        overflow: 'hidden',
+                        transition: 'border-color 0.2s',
+                      }}
+                    >
+                      {/* 标题栏 */}
+                      <div
+                        onClick={() => toggleExpand(field.key)}
                         style={{
-                          padding: '5px 8px',
-                          background: selectedTags.includes(tag.name) ? 'rgba(99,102,241,0.2)' : '#2a2a2a',
-                          border: `1px solid ${selectedTags.includes(tag.name) ? 'rgba(99,102,241,0.4)' : '#444'}`,
-                          borderRadius: '6px',
-                          color: selectedTags.includes(tag.name) ? '#818cf8' : '#aaa',
-                          fontSize: '12px', cursor: 'pointer',
-                          textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                          display: 'flex',
+                          alignItems: 'center',
+                          padding: '12px 16px',
+                          cursor: 'pointer',
+                          gap: '10px',
                         }}
                       >
-                        {tag.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
+                        <span style={{ fontSize: '16px' }}>{field.icon}</span>
+                        <span style={{ fontSize: '14px', fontWeight: 600, color: field.color, flex: 1 }}>
+                          {field.label}
+                        </span>
+                        <span style={{ fontSize: '12px', color: '#666' }}>
+                          {wordCount.toLocaleString()} 字
+                        </span>
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          style={{ display: 'flex', gap: '4px' }}
+                        >
+                          <button
+                            onClick={() => handleCopyField(field.key)}
+                            style={{
+                              padding: '3px 8px',
+                              background: isCopied ? 'rgba(34,197,94,0.15)' : 'transparent',
+                              border: '1px solid #333',
+                              borderRadius: '4px',
+                              color: isCopied ? '#4ade80' : '#666',
+                              fontSize: '11px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {isCopied ? '✓' : '复制'}
+                          </button>
+                          <button
+                            onClick={() => handleStartEdit(field.key)}
+                            style={{
+                              padding: '3px 8px',
+                              background: 'transparent',
+                              border: '1px solid #333',
+                              borderRadius: '4px',
+                              color: '#666',
+                              fontSize: '11px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            编辑
+                          </button>
+                          <button
+                            onClick={() => handleExportField(field.key)}
+                            style={{
+                              padding: '3px 8px',
+                              background: 'transparent',
+                              border: '1px solid #333',
+                              borderRadius: '4px',
+                              color: '#666',
+                              fontSize: '11px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            导出
+                          </button>
+                        </div>
+                        <motion.span
+                          animate={{ rotate: isExpanded ? 180 : 0 }}
+                          style={{ fontSize: '12px', color: '#666' }}
+                        >
+                          ▼
+                        </motion.span>
+                      </div>
+
+                      {/* 内容区 - AnimatePresence 高度动画 */}
+                      <AnimatePresence>
+                        {isExpanded && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.25 }}
+                            style={{ overflow: 'hidden' }}
+                          >
+                            <div style={{
+                              padding: '0 16px 12px 16px',
+                              borderTop: '1px solid #2a2a2a',
+                            }}>
+                              {isEditing ? (
+                                <div style={{ marginTop: '10px' }}>
+                                  <textarea
+                                    value={editingText}
+                                    onChange={(e) => setEditingText(e.target.value)}
+                                    style={{
+                                      width: '100%',
+                                      minHeight: '120px',
+                                      padding: '10px',
+                                      background: '#0f0f0f',
+                                      border: '1px solid #3a3a3a',
+                                      borderRadius: '6px',
+                                      color: '#e0e0e0',
+                                      fontSize: '13px',
+                                      lineHeight: 1.6,
+                                      resize: 'vertical',
+                                      outline: 'none',
+                                      boxSizing: 'border-box',
+                                      fontFamily: 'inherit',
+                                    }}
+                                  />
+                                  <div style={{ display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'flex-end' }}>
+                                    <button
+                                      onClick={handleCancelEdit}
+                                      style={{
+                                        padding: '5px 12px',
+                                        background: '#1a1a1a',
+                                        border: '1px solid #333',
+                                        borderRadius: '4px',
+                                        color: '#888',
+                                        fontSize: '12px',
+                                        cursor: 'pointer',
+                                      }}
+                                    >
+                                      取消
+                                    </button>
+                                    <button
+                                      onClick={handleSaveEdit}
+                                      style={{
+                                        padding: '5px 12px',
+                                        background: '#6366f1',
+                                        border: 'none',
+                                        borderRadius: '4px',
+                                        color: '#fff',
+                                        fontSize: '12px',
+                                        cursor: 'pointer',
+                                        fontWeight: 600,
+                                      }}
+                                    >
+                                      保存
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div style={{
+                                  marginTop: '10px',
+                                  fontSize: '13px',
+                                  color: '#ccc',
+                                  lineHeight: 1.8,
+                                  maxHeight: field.key === 'firstChapter' ? '400px' : '300px',
+                                  overflowY: 'auto',
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word',
+                                }}>
+                                  {text}
+                                </div>
+                              )}
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </motion.div>
+                  )
+                })}
+              </motion.div>
+            ) : (
+              /* ---- 文档视图 ---- */
+              <motion.div
+                key="doc"
+                initial={{ opacity: 0, x: 10 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -10 }}
+                transition={{ duration: 0.2 }}
+                style={{
+                  background: '#1a1a1a',
+                  border: '1px solid #2a2a2a',
+                  borderRadius: '12px',
+                  padding: '24px',
+                  maxHeight: '700px',
+                  overflowY: 'auto',
+                }}
+              >
+                {RESULT_FIELDS.map((field) => {
+                  const { text } = getResultFieldContent(result, field.key)
+                  if (!text) return null
+                  return (
+                    <div key={field.key} style={{ marginBottom: '20px' }}>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        marginBottom: '8px',
+                        paddingBottom: '6px',
+                        borderBottom: `1px solid ${field.color}30`,
+                      }}>
+                        <span>{field.icon}</span>
+                        <span style={{ fontSize: '15px', fontWeight: 600, color: field.color }}>
+                          {field.label}
+                        </span>
+                      </div>
+                      <div style={{
+                        fontSize: '14px',
+                        color: '#ccc',
+                        lineHeight: 1.8,
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                      }}>
+                        {text}
+                      </div>
+                    </div>
+                  )
+                })}
+              </motion.div>
             )}
-          </div>
+          </AnimatePresence>
 
-          {/* 按钮行 */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <button onClick={handleGenerate} disabled={isGenerating || !theme.trim()} title={disabledReason} style={btnStyle}>
-              {isGenerating ? '⏳ 生成中...' : noModel ? '⚠️ 请先配置 AI 模型' : '⚡ 一键推导'}
-            </button>
-            {noModel && !isGenerating && (
-              <div style={{ textAlign: 'center', color: '#f97316', fontSize: '12px', marginTop: '4px' }}>
-                提示：点击右上角「AI模型」页面添加并选择一个模型
+          {/* 底部操作栏：总字数+进度+重新生成+保存 */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            padding: '16px 20px',
+            background: '#1a1a1a',
+            border: '1px solid #2a2a2a',
+            borderRadius: '10px',
+          }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: '12px', color: '#666', marginBottom: '6px' }}>
+                内容完整度
               </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* === 生成中动画 === */}
-      {isGenerating && (
-        <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '14px', padding: '36px', textAlign: 'center', marginTop: '20px' }}>
-          <div style={{ fontSize: '40px', marginBottom: '14px', animation: 'pulse 1.5s ease-in-out infinite' as any }}>⏳</div>
-          <div style={{ color: '#e0e0e0', fontSize: '16px', marginBottom: '6px', fontWeight: 600 }}>正在推导：{deduceTask?.theme}</div>
-          <div style={{ color: '#888', fontSize: '14px', marginBottom: '18px' }}>已用时 <span style={{ color: '#6366f1', fontWeight: 700 }}>{elapsed}</span> 秒</div>
-          <div style={{ width: '100%', maxWidth: '400px', height: '8px', background: '#333', borderRadius: '4px', margin: '0 auto 18px', overflow: 'hidden' }}>
-            <div style={{
-              width: `${Math.min(90, (elapsed / 60) * 100)}%`,
-              height: '100%',
-              background: 'linear-gradient(90deg, #6366f1, #a78bfa, #6366f1)',
-              backgroundSize: '200% 100%',
-              borderRadius: '4px',
-              transition: 'width 1s ease',
-              animation: 'shimmer 2s linear infinite' as any,
-            }} />
-          </div>
-          <div style={{ color: '#666', fontSize: '13px', lineHeight: 1.6 }}>
-            AI 正在分析主题、构建世界观、设计角色、规划情节...<br />
-            您可以切换到其他页面，推导完成后会自动保存
-          </div>
-        </div>
-      )}
-
-      {/* === 错误面板 === */}
-      {deduceError && (
-        <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '14px', padding: '20px', marginTop: '20px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
-            <span style={{ fontSize: '24px' }}>❌</span>
-            <div>
-              <div style={{ color: '#f87171', fontSize: '14px', fontWeight: 600 }}>推导失败</div>
-              <div style={{ color: '#ccc', fontSize: '13px', marginTop: '4px' }}>{deduceError}</div>
+              <div style={{
+                width: '100%',
+                height: '6px',
+                background: '#0f0f0f',
+                borderRadius: '9999px',
+                overflow: 'hidden',
+              }}>
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min(100, (totalWordCount / 5000) * 100)}%` }}
+                  transition={{ duration: 1, ease: 'easeOut' }}
+                  style={{
+                    height: '100%',
+                    background: 'linear-gradient(90deg, #6366f1, #a855f7)',
+                    borderRadius: '9999px',
+                  }}
+                />
+              </div>
             </div>
-          </div>
-          <div style={{ display: 'flex', gap: '8px', marginLeft: '34px' }}>
-            <button onClick={() => store.clearDeduceTask()} style={{ padding: '7px 16px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', color: '#aaa', fontSize: '13px', cursor: 'pointer' }}>
-              关闭
+            <span style={{ fontSize: '13px', color: '#888', minWidth: '80px' }}>
+              {totalWordCount.toLocaleString()} 字
+            </span>
+            <button
+              onClick={() => {
+                setResult(null)
+                setExpandedKeys(new Set())
+              }}
+              style={{
+                padding: '8px 16px',
+                background: '#1a1a1a',
+                border: '1px solid #333',
+                borderRadius: '6px',
+                color: '#e0e0e0',
+                fontSize: '13px',
+                cursor: 'pointer',
+              }}
+            >
+              🔄 重新生成
             </button>
-            <button onClick={() => { store.clearDeduceTask(); setTimeout(() => handleGenerate(), 100) }} style={{ padding: '7px 16px', background: '#ef4444', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '13px', cursor: 'pointer', fontWeight: 600 }}>
-              🔄 重试
+            <button
+              onClick={handleSave}
+              style={{
+                padding: '8px 20px',
+                background: '#6366f1',
+                border: 'none',
+                borderRadius: '6px',
+                color: '#fff',
+                fontSize: '13px',
+                cursor: 'pointer',
+                fontWeight: 600,
+              }}
+            >
+              ✓ 保存项目
             </button>
           </div>
-        </div>
-      )}
+        </motion.div>
+      ) : (
+        /* ========== 输入面板 ========== */
+        <motion.div {...fadeInUp} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
-      {/* === 结果面板 === */}
-      {deduceResult && !isGenerating && (
-        <div style={{
-          background: '#1a1a1a',
-          border: '1px solid #2a2a2a',
-          borderRadius: '14px',
-          padding: '24px',
-          marginTop: '20px',
-          maxHeight: '90vh',
-          overflowY: 'auto',
-          overflowX: 'hidden',
-          minHeight: 0,
-        }}>
-
-          {/* --- 顶部：标题 + 操作按钮 --- */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '18px', flexWrap: 'wrap', gap: '10px' }}>
-            <div>
-              <div style={{ fontSize: '18px', fontWeight: 700, color: '#fff' }}>✅ {deduceResult.title}</div>
-              <div style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>推导完成，可保存到项目或放弃</div>
-            </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={handleDiscard}  style={{ padding: '7px 14px', background: '#1a1a1a', border: '1px solid #444', borderRadius: '8px', color: '#aaa', fontSize: '13px', cursor: 'pointer' }}>🗑 放弃</button>
-              <button onClick={handleSave}    style={{ padding: '7px 14px', background: '#1a1a1a', border: '1px solid #6366f1', borderRadius: '8px', color: '#818cf8', fontSize: '13px', cursor: 'pointer', fontWeight: 600 }}>💾 保存</button>
-              <button onClick={handleSaveAndView} style={{ padding: '7px 16px', background: '#6366f1', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '13px', cursor: 'pointer', fontWeight: 600 }}>✓ 保存并查看</button>
-            </div>
-          </div>
-
-          {/* --- 4 个统计卡片 --- */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '16px' }}>
-            <div style={{ padding: '14px', background: '#0f0f0f', borderRadius: '10px', textAlign: 'center' }}>
-              <div style={{ fontSize: '22px', fontWeight: 'bold', color: '#818cf8' }}>{1 + (deduceResult.supporting?.length || 0)}</div>
-              <div style={{ fontSize: '12px', color: '#888', marginTop: '2px' }}>角色</div>
-            </div>
-            <div style={{ padding: '14px', background: '#0f0f0f', borderRadius: '10px', textAlign: 'center' }}>
-              <div style={{ fontSize: '22px', fontWeight: 'bold', color: '#4ade80' }}>{deduceResult.chapters?.length || 0}</div>
-              <div style={{ fontSize: '12px', color: '#888', marginTop: '2px' }}>章节</div>
-            </div>
-            <div style={{ padding: '14px', background: '#0f0f0f', borderRadius: '10px', textAlign: 'center' }}>
-              <div style={{ fontSize: '22px', fontWeight: 'bold', color: '#facc15' }}>{deduceResult.plotLine?.events?.length || 0}</div>
-              <div style={{ fontSize: '12px', color: '#888', marginTop: '2px' }}>事件</div>
-            </div>
-            <div style={{ padding: '14px', background: '#0f0f0f', borderRadius: '10px', textAlign: 'center' }}>
-              <div style={{ fontSize: '22px', fontWeight: 'bold', color: '#f472b6' }}>{deduceResult.firstChapter || deduceResult.chapters?.[0]?.summary ? '✓' : '✗'}</div>
-              <div style={{ fontSize: '12px', color: '#888', marginTop: '2px' }}>首章内容</div>
-            </div>
-          </div>
-
-          {/* --- 故事简介 --- */}
-          {deduceResult.summary && (
-            <div style={{ padding: '14px', background: '#0f0f0f', borderRadius: '10px', marginBottom: '12px' }}>
-              <div style={{ fontSize: '12px', color: '#818cf8', fontWeight: 600, marginBottom: '6px' }}>📖 故事简介</div>
-              <div style={{ fontSize: '13px', color: '#bbb', lineHeight: 1.7, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{deduceResult.summary}</div>
-            </div>
+          {/* 已有项目提示 */}
+          {currentNovel && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              style={{
+                background: 'rgba(99,102,241,0.08)',
+                border: '1px solid rgba(99,102,241,0.2)',
+                borderRadius: '10px',
+                padding: '12px 16px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <span style={{ color: '#818cf8', fontSize: '14px' }}>⚠️ 已有项目数据，重新推导将覆盖现有内容</span>
+              <button
+                onClick={handleReDeduce}
+                style={{
+                  padding: '6px 16px',
+                  background: '#ef4444',
+                  border: 'none',
+                  borderRadius: '6px',
+                  color: '#fff',
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                }}
+              >
+                🔄 重新推导
+              </button>
+            </motion.div>
           )}
 
-          {/* --- 查看全部结果按钮 + 展开面板 --- */}
-          <div style={{ borderTop: '1px solid #2a2a2a', paddingTop: '14px', marginTop: '4px' }}>
-            <button onClick={() => setShowFullResult(!showFullResult)}
-              style={{ padding: '8px 16px', background: 'transparent', border: '1px solid #444', borderRadius: '8px', color: '#aaa', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span>{showFullResult ? '▼' : '▶'}</span>
-              {showFullResult ? '收起全部推导结果' : '查看全部推导结果'}
-            </button>
-
-            {showFullResult && (
-              <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '14px', overflow: 'visible', height: 'auto' }}>
-
-                {/* 章节列表 */}
-                {deduceResult.chapters?.length > 0 && (
-                  <div style={{ background: '#0f0f0f', borderRadius: '10px', padding: '14px' }}>
-                    <div style={{ fontSize: '12px', color: '#4ade80', fontWeight: 600, marginBottom: '8px' }}>📄 章节列表（共 {deduceResult.chapters.length} 章）</div>
-                    {deduceResult.chapters.map((ch: any, idx: number) => (
-                      <div key={idx} style={{ padding: '8px 12px', background: '#1a1a1a', borderRadius: '6px', marginBottom: '6px' }}>
-                        <div style={{ fontSize: '13px', color: '#e0e0e0', fontWeight: 500 }}>{ch.title}</div>
-                        <div style={{ fontSize: '12px', color: '#888', marginTop: '2px', lineHeight: 1.5, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{ch.summary}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* 配角列表 */}
-                {deduceResult.supporting?.length > 0 && (
-                  <div style={{ background: '#0f0f0f', borderRadius: '10px', padding: '14px' }}>
-                    <div style={{ fontSize: '12px', color: '#818cf8', fontWeight: 600, marginBottom: '8px' }}>👥 配角列表（共 {deduceResult.supporting.length} 个）</div>
-                    {deduceResult.supporting.map((s: any, idx: number) => (
-                      <div key={idx} style={{ padding: '10px 12px', background: '#1a1a1a', borderRadius: '6px', marginBottom: '6px' }}>
-                        <div style={{ fontSize: '13px', color: '#e0e0e0', fontWeight: 500 }}>{idx + 1}. {s.name}</div>
-                        <div style={{ fontSize: '12px', color: '#888', marginTop: '3px', lineHeight: 1.5, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
-                          {s.background || '暂无描述'}
-                        </div>
-                        <div style={{ fontSize: '11px', color: '#666', marginTop: '3px' }}>
-                          {s.basicInfo?.gender && `性别：${s.basicInfo.gender}`}
-                          {s.basicInfo?.age && ` · 年龄：${s.basicInfo.age}`}
-                          {s.basicInfo?.occupation && ` · 职业：${s.basicInfo.occupation}`}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* 世界观 */}
-                {deduceResult.worldSetting && (
-                  <div style={{ background: '#0f0f0f', borderRadius: '10px', padding: '14px' }}>
-                    <div style={{ fontSize: '12px', color: '#facc15', fontWeight: 600, marginBottom: '8px' }}>🌍 世界观</div>
-                    <div style={{ fontSize: '12px', color: '#bbb', lineHeight: 1.6, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap', marginBottom: '10px' }}>
-                      {deduceResult.worldSetting.description || deduceResult.worldSetting.overview || '暂无描述'}
-                    </div>
-                    {deduceResult.worldSetting.rules?.length > 0 && (
-                      <>
-                        <div style={{ fontSize: '11px', color: '#6366f1', fontWeight: 600, marginBottom: '4px' }}>📋 规则（{deduceResult.worldSetting.rules.length} 条）</div>
-                        {deduceResult.worldSetting.rules.map((r: any, idx: number) => (
-                        <div key={idx} style={{ padding: '6px 10px', background: '#1a1a1a', borderRadius: '4px', marginBottom: '4px', fontSize: '12px', color: '#aaa', lineHeight: 1.4, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
-                            <span style={{ color: '#6366f1', fontWeight: 500 }}>{r.name}</span>
-                            {r.description && <span>：{r.description}</span>}
-                          </div>
-                        ))}
-                      </>
-                    )}
-                    {deduceResult.worldSetting.locations?.length > 0 && (
-                      <div style={{ marginBottom: '8px' }}>
-                        <div style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, marginBottom: '4px' }}>📍 地点（{deduceResult.worldSetting.locations.length} 个）</div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                          {deduceResult.worldSetting.locations.map((loc: any, idx: number) => (
-                            <span key={idx} style={{ padding: '4px 10px', background: 'rgba(16,185,129,0.1)', color: '#34d399', borderRadius: '6px', fontSize: '12px' }}>{loc.name}</span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    {deduceResult.worldSetting.timeline?.length > 0 && (
-                      <div>
-                        <div style={{ fontSize: '11px', color: '#f59e0b', fontWeight: 600, marginBottom: '4px' }}>📅 时间线（{deduceResult.worldSetting.timeline.length} 条）</div>
-                        {deduceResult.worldSetting.timeline.map((t: any, idx: number) => (
-                        <div key={idx} style={{ padding: '6px 10px', background: '#1a1a1a', borderRadius: '4px', marginBottom: '4px', fontSize: '12px', color: '#aaa', lineHeight: 1.4, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
-                            {t.title || t.name}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '8px' }}>
-                      {deduceResult.worldSetting.society && <span style={{ fontSize: '11px', color: '#888' }}>🏛️ 社会：{deduceResult.worldSetting.society}</span>}
-                      {deduceResult.worldSetting.culture && <span style={{ fontSize: '11px', color: '#888' }}>🎭 文化：{deduceResult.worldSetting.culture}</span>}
-                      {deduceResult.worldSetting.economy && <span style={{ fontSize: '11px', color: '#888' }}>💰 经济：{deduceResult.worldSetting.economy}</span>}
-                    </div>
-                  </div>
-                )}
-
-                {/* 剧情事件 */}
-                {deduceResult.plotLine?.events?.length > 0 && (
-                  <div style={{ background: '#0f0f0f', borderRadius: '10px', padding: '14px' }}>
-                    <div style={{ fontSize: '12px', color: '#f472b6', fontWeight: 600, marginBottom: '8px' }}>📈 剧情事件（共 {deduceResult.plotLine.events.length} 个）</div>
-                    {deduceResult.plotLine.events.map((evt: any, idx: number) => (
-                    <div style={{ padding: '6px 10px', background: '#1a1a1a', borderRadius: '4px', marginBottom: '4px', fontSize: '12px', color: '#ccc', lineHeight: 1.4, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
-                        <span style={{ color: '#f472b6', fontWeight: 600 }}>#{idx + 1}</span> {evt.title}
-                        {evt.description && <span style={{ color: '#888' }}> — {evt.description}</span>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* 主角信息 */}
-                {deduceResult.protagonist && (
-                  <div style={{ background: '#0f0f0f', borderRadius: '10px', padding: '14px' }}>
-                    <div style={{ fontSize: '12px', color: '#818cf8', fontWeight: 600, marginBottom: '8px' }}>⭐ 主角</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '6px' }}>
-                      <span style={{ fontSize: '12px', padding: '4px 8px', background: '#1a1a1a', borderRadius: '4px', color: '#ccc' }}>姓名：{deduceResult.protagonist.name}</span>
-                      {deduceResult.protagonist.basicInfo?.gender && <span style={{ fontSize: '12px', padding: '4px 8px', background: '#1a1a1a', borderRadius: '4px', color: '#ccc' }}>性别：{deduceResult.protagonist.basicInfo.gender}</span>}
-                      {deduceResult.protagonist.basicInfo?.age && <span style={{ fontSize: '12px', padding: '4px 8px', background: '#1a1a1a', borderRadius: '4px', color: '#ccc' }}>年龄：{deduceResult.protagonist.basicInfo.age}</span>}
-                      {deduceResult.protagonist.basicInfo?.occupation && <span style={{ fontSize: '12px', padding: '4px 8px', background: '#1a1a1a', borderRadius: '4px', color: '#ccc' }}>职业：{deduceResult.protagonist.basicInfo.occupation}</span>}
-                    </div>
-                    {deduceResult.protagonist.personality?.length > 0 && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
-                        {deduceResult.protagonist.personality.map((p: string, idx: number) => (
-                          <span key={idx} style={{ fontSize: '11px', padding: '2px 8px', background: 'rgba(139,92,246,0.1)', color: '#a78bfa', borderRadius: '4px' }}>{p}</span>
-                        ))}
-                      </div>
-                    )}
-                    {deduceResult.protagonist.appearance && (
-                      <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '4px', lineHeight: 1.5, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
-                        <span style={{ color: '#888' }}>外貌：</span>{deduceResult.protagonist.appearance}
-                      </div>
-                    )}
-                    {deduceResult.protagonist.background && (
-                      <div style={{ fontSize: '12px', color: '#888', lineHeight: 1.6, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
-                        <span style={{ color: '#888' }}>背景：</span>{deduceResult.protagonist.background}
-                      </div>
-                    )}
-                    {deduceResult.protagonist.abilities && (
-                      <div style={{ fontSize: '12px', color: '#666', marginTop: '4px', lineHeight: 1.5, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
-                        <span style={{ color: '#888' }}>能力：</span>{deduceResult.protagonist.abilities}
-                      </div>
-                    )}
-                  </div>
-                )}
+          {/* 输入面板主体 */}
+          <div style={{
+            background: '#1a1a1a',
+            border: '1px solid #2a2a2a',
+            borderRadius: '12px',
+            padding: '20px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '20px',
+          }}>
+            {/* ---- 5.2 主题输入 + 模板按钮 ---- */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <div style={{ fontSize: '14px', color: '#aaa' }}>
+                  主题 / 关键词
+                  <span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span>
+                </div>
+                <button
+                  onClick={() => setShowTemplates(!showTemplates)}
+                  style={{
+                    padding: '4px 12px',
+                    background: showTemplates ? 'rgba(99,102,241,0.15)' : 'transparent',
+                    border: `1px solid ${showTemplates ? 'rgba(99,102,241,0.3)' : '#333'}`,
+                    borderRadius: '6px',
+                    color: showTemplates ? '#6366f1' : '#888',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  🎨 主题模板
+                </button>
               </div>
+              <input
+                type="text"
+                value={theme}
+                onChange={(e) => setTheme(e.target.value)}
+                placeholder="例如：都市异能、穿越修仙、办公室恋情、末世求生..."
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  background: '#0f0f0f',
+                  border: '1px solid #2a2a2a',
+                  borderRadius: '8px',
+                  color: '#e0e0e0',
+                  fontSize: '14px',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                }}
+              />
+
+              {/* 已选标签展示 */}
+              {selectedTags.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
+                  {selectedTags.map((tag) => (
+                    <span
+                      key={tag}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '2px 8px',
+                        background: 'rgba(99,102,241,0.1)',
+                        border: '1px solid rgba(99,102,241,0.2)',
+                        borderRadius: '4px',
+                        fontSize: '12px',
+                        color: '#818cf8',
+                      }}
+                    >
+                      {tag}
+                      <span
+                        onClick={() => setSelectedTags((prev) => prev.filter((t) => t !== tag))}
+                        style={{ cursor: 'pointer', color: '#666', fontSize: '11px' }}
+                      >
+                        ×
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* 模板展开面板 */}
+              <AnimatePresence>
+                {showTemplates && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.25 }}
+                    style={{ overflow: 'hidden' }}
+                  >
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+                      gap: '10px',
+                      marginTop: '12px',
+                      padding: '12px',
+                      background: '#0f0f0f',
+                      borderRadius: '8px',
+                      border: '1px solid #2a2a2a',
+                    }}>
+                      {THEME_TEMPLATES.map((tpl) => (
+                        <motion.button
+                          key={tpl.id}
+                          whileHover={{ scale: 1.03 }}
+                          whileTap={{ scale: 0.97 }}
+                          onClick={() => {
+                            setTheme(tpl.theme)
+                            setMaleCount(tpl.defaultMale)
+                            setFemaleCount(tpl.defaultFemale)
+                            setLength(tpl.defaultLength)
+                            setShowTemplates(false)
+                          }}
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '4px',
+                            padding: '10px',
+                            background: '#1a1a1a',
+                            border: `1px solid ${tpl.color}30`,
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            textAlign: 'left',
+                            transition: 'border-color 0.2s',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ fontSize: '16px' }}>{tpl.icon}</span>
+                            <span style={{ fontSize: '13px', fontWeight: 600, color: tpl.color }}>
+                              {tpl.name}
+                            </span>
+                          </div>
+                          <span style={{ fontSize: '11px', color: '#666', lineHeight: 1.4 }}>
+                            {tpl.description}
+                          </span>
+                        </motion.button>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            {/* ---- AI 模型选择 ---- */}
+            <div>
+              <div style={{ fontSize: '14px', color: '#aaa', marginBottom: '8px' }}>
+                AI 模型
+                <span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span>
+              </div>
+              {aiModels.length === 0 ? (
+                <div style={{
+                  padding: '12px 16px',
+                  background: 'rgba(239,68,68,0.08)',
+                  border: '1px solid rgba(239,68,68,0.2)',
+                  borderRadius: '8px',
+                  color: '#ef4444',
+                  fontSize: '13px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}>
+                  <span>⚠️</span>
+                  <span>尚未配置 AI 模型，请先前往设置页面添加模型</span>
+                  <button
+                    onClick={() => navigate('/settings')}
+                    style={{
+                      marginLeft: 'auto',
+                      padding: '4px 10px',
+                      background: '#6366f1',
+                      border: 'none',
+                      borderRadius: '4px',
+                      color: '#fff',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    前往设置
+                  </button>
+                </div>
+              ) : (
+                <select
+                  value={selectedModelId}
+                  onChange={(e) => setSelectedModelId(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    background: '#0f0f0f',
+                    border: '1px solid #2a2a2a',
+                    borderRadius: '8px',
+                    color: '#e0e0e0',
+                    fontSize: '14px',
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                  }}
+                >
+                  {aiModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            {/* ---- 5档长度可视化卡片 ---- */}
+            <div>
+              <div style={{ fontSize: '14px', color: '#aaa', marginBottom: '8px' }}>目标长度</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '8px' }}>
+                {LENGTH_OPTIONS.map((opt) => (
+                  <motion.button
+                    key={opt.value}
+                    layoutId={`length-${opt.value}`}
+                    whileHover={{ scale: 1.04 }}
+                    whileTap={{ scale: 0.96 }}
+                    onClick={() => setLength(opt.value)}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '10px 6px',
+                      background: length === opt.value
+                        ? `${opt.color}15`
+                        : '#0f0f0f',
+                      border: `1.5px solid ${length === opt.value ? opt.color : '#2a2a2a'}`,
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    <span style={{ fontSize: '18px' }}>{opt.icon}</span>
+                    <span style={{
+                      fontSize: '13px',
+                      fontWeight: length === opt.value ? 700 : 400,
+                      color: length === opt.value ? opt.color : '#ccc',
+                    }}>
+                      {opt.label}
+                    </span>
+                    <span style={{ fontSize: '10px', color: '#666' }}>
+                      {opt.chapterCount}
+                    </span>
+                  </motion.button>
+                ))}
+              </div>
+            </div>
+
+            {/* ---- 角色数量 +/- 按钮组 ---- */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              {[
+                { label: '男角色', count: maleCount, setCount: setMaleCount, color: '#3b82f6' },
+                { label: '女角色', count: femaleCount, setCount: setFemaleCount, color: '#ec4899' },
+              ].map(({ label, count, setCount, color }) => (
+                <div key={label}>
+                  <div style={{ fontSize: '14px', color: '#aaa', marginBottom: '8px' }}>{label}</div>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0',
+                    background: '#0f0f0f',
+                    border: '1px solid #2a2a2a',
+                    borderRadius: '8px',
+                    overflow: 'hidden',
+                  }}>
+                    <motion.button
+                      whileTap={{ scale: 0.9 }}
+                      onClick={() => setCount(Math.max(0, count - 1))}
+                      style={{
+                        width: '40px',
+                        height: '40px',
+                        background: '#1a1a1a',
+                        border: 'none',
+                        borderRight: '1px solid #2a2a2a',
+                        color: '#888',
+                        fontSize: '18px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      −
+                    </motion.button>
+                    <div style={{
+                      flex: 1,
+                      textAlign: 'center',
+                      fontSize: '16px',
+                      fontWeight: 700,
+                      color,
+                    }}>
+                      {count}
+                    </div>
+                    <motion.button
+                      whileTap={{ scale: 0.9 }}
+                      onClick={() => setCount(Math.min(10, count + 1))}
+                      style={{
+                        width: '40px',
+                        height: '40px',
+                        background: '#1a1a1a',
+                        border: 'none',
+                        borderLeft: '1px solid #2a2a2a',
+                        color: '#888',
+                        fontSize: '18px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      +
+                    </motion.button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* 成人模式提示 */}
+            {adultMode && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                style={{
+                  background: 'rgba(239,68,68,0.08)',
+                  border: '1px solid rgba(239,68,68,0.2)',
+                  borderRadius: '8px',
+                  padding: '12px 16px',
+                  fontSize: '14px',
+                  color: '#ef4444',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                🔥 当前处于成人模式，AI 将使用成人情色小说专用提示词进行推导
+              </motion.div>
+            )}
+
+            {/* 错误提示 */}
+            <AnimatePresence>
+              {error && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  style={{
+                    background: 'rgba(239,68,68,0.08)',
+                    border: '1px solid rgba(239,68,68,0.2)',
+                    borderRadius: '8px',
+                    padding: '12px 16px',
+                    fontSize: '14px',
+                    color: '#ef4444',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {error}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* ---- 5.3 生成按钮区域 ---- */}
+            {loading ? (
+              <motion.button
+                whileTap={{ scale: 0.95 }}
+                onClick={handleStop}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  background: '#ef4444',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  padding: '12px 16px',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                <motion.span
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                  style={{ display: 'inline-block' }}
+                >
+                  ⏹
+                </motion.span>
+                停止生成
+              </motion.button>
+            ) : (
+              <motion.button
+                whileHover={{ scale: 1.01 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={handleDeduce}
+                disabled={aiModels.length === 0}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  background: aiModels.length === 0 ? '#333' : '#6366f1',
+                  color: aiModels.length === 0 ? '#666' : '#fff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  padding: '12px 16px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  cursor: aiModels.length === 0 ? 'not-allowed' : 'pointer',
+                }}
+              >
+                <span>⚡</span>
+                {aiModels.length === 0 ? '请先配置 AI 模型' : '一键推导'}
+              </motion.button>
             )}
           </div>
-        </div>
+
+          {/* ---- 5.4 流式输出区域 ---- */}
+          <AnimatePresence>
+            {loading && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.3 }}
+                style={{
+                  background: '#1a1a1a',
+                  border: '1px solid #2a2a2a',
+                  borderRadius: '12px',
+                  padding: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '16px',
+                }}
+              >
+                {/* 进度条 */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '14px' }}>
+                  <span style={{ color: '#aaa' }}>{progressLabel}</span>
+                  <span style={{ color: '#6366f1', fontFamily: 'monospace', fontWeight: 600 }}>
+                    {progress}%
+                  </span>
+                </div>
+                <div style={{
+                  width: '100%',
+                  height: '6px',
+                  background: '#0f0f0f',
+                  borderRadius: '9999px',
+                  overflow: 'hidden',
+                }}>
+                  <motion.div
+                    initial={{ width: '5%' }}
+                    animate={{ width: `${progress}%` }}
+                    transition={{ duration: 0.5 }}
+                    style={{
+                      height: '100%',
+                      background: 'linear-gradient(90deg, #6366f1, #a855f7)',
+                      borderRadius: '9999px',
+                    }}
+                  />
+                </div>
+
+                {/* 流式输出预览 */}
+                {streamText.length > 0 && (
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '12px', color: '#666' }}>实时输出</span>
+                      <span style={{ fontSize: '12px', color: '#6366f1', fontFamily: 'monospace' }}>
+                        {streamText.length.toLocaleString()} 字
+                      </span>
+                    </div>
+                    <div style={{
+                      background: '#0f0f0f',
+                      border: '1px solid #2a2a2a',
+                      borderRadius: '8px',
+                      padding: '16px',
+                      maxHeight: '280px',
+                      overflow: 'auto',
+                      fontSize: '12px',
+                      color: '#aaa',
+                      whiteSpace: 'pre-wrap',
+                      fontFamily: 'monospace',
+                      lineHeight: 1.6,
+                      wordBreak: 'break-word',
+                    }}>
+                      {streamText.slice(-3000)}
+                      {/* 打字机光标 */}
+                      <motion.span
+                        animate={{ opacity: [1, 0] }}
+                        transition={{ duration: 0.6, repeat: Infinity }}
+                        style={{ color: '#6366f1', fontWeight: 700 }}
+                      >
+                        ▌
+                      </motion.span>
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* 功能说明卡片 */}
+          {!loading && !result && (
+            <motion.div
+              variants={staggerContainer}
+              initial="initial"
+              animate="animate"
+              style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}
+            >
+              {FEATURE_CARDS.map((card) => (
+                <motion.div
+                  key={card.title}
+                  variants={staggerItem}
+                  whileHover={{ y: -2, borderColor: card.color + '40' }}
+                  style={{
+                    background: '#1a1a1a',
+                    border: '1px solid #2a2a2a',
+                    borderRadius: '12px',
+                    padding: '16px',
+                    transition: 'border-color 0.2s',
+                  }}
+                >
+                  <div style={{ fontSize: '18px', marginBottom: '8px' }}>{card.icon}</div>
+                  <div style={{ fontSize: '14px', fontWeight: 500, color: '#ccc' }}>{card.title}</div>
+                  <div style={{ fontSize: '12px', color: '#666', marginTop: '4px', lineHeight: 1.4 }}>
+                    {card.description}
+                  </div>
+                </motion.div>
+              ))}
+            </motion.div>
+          )}
+
+          {/* ---- 5.6 已保存项目区域 ---- */}
+          {currentNovel && !loading && !result && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.3 }}
+              style={{
+                background: '#1a1a1a',
+                border: '1px solid #2a2a2a',
+                borderRadius: '12px',
+                padding: '16px',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <span style={{ fontSize: '14px', fontWeight: 600, color: '#ccc' }}>
+                  📂 已保存项目
+                </span>
+                <button
+                  onClick={() => navigate('/plotview')}
+                  style={{
+                    padding: '4px 10px',
+                    background: 'transparent',
+                    border: '1px solid #333',
+                    borderRadius: '4px',
+                    color: '#888',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  查看剧情观 →
+                </button>
+              </div>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                padding: '10px 14px',
+                background: '#0f0f0f',
+                borderRadius: '8px',
+              }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '14px', fontWeight: 600, color: '#e0e0e0' }}>
+                    {currentNovel.title}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>
+                    {currentNovel.chapters?.length || 0} 章 · {currentNovel.characters?.length || 0} 角色
+                  </div>
+                </div>
+                <button
+                  onClick={handleReDeduce}
+                  style={{
+                    padding: '6px 12px',
+                    background: 'rgba(99,102,241,0.1)',
+                    border: '1px solid rgba(99,102,241,0.2)',
+                    borderRadius: '6px',
+                    color: '#6366f1',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  重新推导
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </motion.div>
       )}
     </PageWrapper>
   )

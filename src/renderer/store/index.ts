@@ -43,6 +43,7 @@ interface StoreState {
     maleCount: number
     femaleCount: number
     targetLength: string
+    adultMode: boolean
     result: any | null
     error: string | null
     startTime: number
@@ -509,6 +510,7 @@ export const useAppStore = create<StoreState & StoreActions>()(
           maleCount: params.maleCount,
           femaleCount: params.femaleCount,
           targetLength: params.targetLength,
+          adultMode: get().adultMode,
           result: null,
           error: null,
           startTime: Date.now(),
@@ -525,23 +527,27 @@ export const useAppStore = create<StoreState & StoreActions>()(
       // ----- 一键推导结果导入（使用统一转换层） -----
       importFromDeduce: (result, firstChapterContent?: string) =>
         set((state) => {
-          const appData = transformDeduceToAppData(result, { firstChapterContent, adultMode: state.adultMode })
+          // 修复：首章内容优先级：显式传入 > result.firstChapter > 空
+          // 确保首章内容正确写入第一章（transformDeduceToAppData 会将其写入 chapters[0].content）
+          const mergedFirstChapter = firstChapterContent || result.firstChapter || ''
+          const appData = transformDeduceToAppData(result, {
+            firstChapterContent: mergedFirstChapter,
+            adultMode: state.deduceTask?.adultMode ?? state.adultMode,
+          })
 
           const novel: Novel = {
             id: genId(),
             title: result.title || '未命名项目',
             summary: result.summary || '',
-            adultMode: state.adultMode,
+            adultMode: state.deduceTask?.adultMode ?? state.adultMode,
             tags: [],
             targetWords: '30000',
             characters: appData.charIds,
             worldSettings: [appData.worldSetting.id],
-            chapters: appData.chapters.map((c: any) => c.id),
+            chapters: appData.chapters.map((c: Chapter) => c.id),
             plotLines: [appData.plotLine.id],
             createdAt: Date.now(),
             updatedAt: Date.now(),
-            emotionEvents: appData.emotionEvents,
-            outlineNodes: appData.outlineNodes,
           }
 
           return {
@@ -628,12 +634,8 @@ export const useAppStore = create<StoreState & StoreActions>()(
         if (!data || typeof data !== 'object') return
         const d = data as Record<string, unknown>
 
-        // 兼容旧数据：补充新字段默认值
-        const novel = (d.currentNovel as any) || null
-        if (novel) {
-          if (!novel.emotionEvents) novel.emotionEvents = []
-          if (!novel.outlineNodes) novel.outlineNodes = []
-        }
+        // 兼容旧数据：emotionEvents/outlineNodes 已迁移到 store 根状态
+        const novel = (d.currentNovel as unknown as Novel | null) ?? null
 
         const currentModelId = d.currentModelId as string | null
 

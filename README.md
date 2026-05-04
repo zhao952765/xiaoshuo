@@ -12,7 +12,7 @@
 - [快速开始](#-快速开始)
 - [技术栈](#-技术栈)
 - [架构概览](#-架构概览)
-- [路由与页面](#-路由与页面)
+- [解析与转换层](#-解析与转换层)
 - [模块详解](#-模块详解)
 - [Store API](#-store-api)
 - [类型系统](#-类型系统)
@@ -23,7 +23,7 @@
 
 ---
 
-## ✨ 功能一览
+## 功能一览
 
 | 模块 | 路由 | 核心能力 |
 |------|------|----------|
@@ -44,7 +44,7 @@
 
 ---
 
-## 🚀 快速开始
+## 快速开始
 
 ```bash
 # 1. 克隆仓库
@@ -68,7 +68,7 @@ npm run pack
 
 ---
 
-## 🏗️ 技术栈
+## 技术栈
 
 | 技术 | 版本 | 用途 |
 |------|------|------|
@@ -87,7 +87,7 @@ npm run pack
 
 ---
 
-## 🏛️ 架构概览
+## 架构概览
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -128,6 +128,9 @@ npm run pack
 │  ┌──────────────────────────────────────────────────┐   │
 │  │            Utils                                  │   │
 │  │  promptLoader.ts → Vite glob 加载 .md 提示词文件   │   │
+│  │  markdownParser.ts → Markdown 字段提取工具         │   │
+│  │  deduceParser.ts → 推导结果原始解析器              │   │
+│  │  deduceTransformer.ts → 统一转换层                 │   │
 │  └──────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -143,99 +146,59 @@ npm run pack
 
 ---
 
-## 📁 项目结构
+## 解析与转换层
 
-```
-private-novel-studio-pro/
-├── electron/
-│   ├── main.ts              # Electron 主进程（窗口创建、生命周期）
-│   └── preload.ts           # preload 桥接脚本
-├── assets/                   # 图标等静态资源
-├── public/                   # 公共静态文件
-├── src/
-│   ├── config/
-│   │   ├── types.ts          # 全局类型定义（16+ 接口 + 13+ 类型别名）
-│   │   └── prompts/          # AI 提示词 .md 文件（编译时 glob 导入）
-│   ├── main/
-│   │   └── index.ts          # Electron 主进程入口
-│   ├── renderer/
-│   │   ├── App.tsx           # 应用入口 + beforeunload 持久化
-│   │   ├── main.tsx          # React render 入口
-│   │   ├── index.css         # 全局样式（滚动条/选择颜色）
-│   │   ├── components/
-│   │   │   ├── PageWrapper.tsx    # 页面统一布局包装器
-│   │   │   ├── Sidebar.tsx        # 侧边栏导航
-│   │   │   ├── ErrorBoundary.tsx  # 错误边界
-│   │   │   └── tagPrompts.ts      # 标签提示词（旧副本）
-│   │   ├── constants/
-│   │   │   └── tagPrompts.ts      # 标签系统常量配置
-│   │   ├── core/                  # 核心创作功能
-│   │   │   ├── deduce/            # 一键推导
-│   │   │   ├── longPlan/          # 长篇规划
-│   │   │   ├── continue/          # 续写
-│   │   │   └── polish/            # 润色 & AI味检测
-│   │   ├── modules/               # 辅助业务模块
-│   │   │   ├── character/         # 角色管理
-│   │   │   ├── world/             # 世界观
-│   │   │   ├── plotView/          # 剧情可视化
-│   │   │   ├── tags/              # 智能标签
-│   │   │   ├── memory/            # 记忆系统
-│   │   │   └── chat/              # AI 对话
-│   │   ├── pages/                 # 路由页面
-│   │   │   ├── dashboard/         # 首页
-│   │   │   ├── aiModel/           # AI 模型配置
-│   │   │   ├── logs/              # 日志查看
-│   │   │   └── settings/          # 设置中心
-│   │   ├── store/
-│   │   │   └── index.ts           # Zustand 全局状态（791 行）
-│   │   └── utils/
-│   │       └── promptLoader.ts    # 提示词加载工具
-│   ├── index.css
-│   └── main.tsx
-├── package.json
-├── vite.config.ts
-├── tsconfig.json
-└── README.md
+### Markdown 格式解析工具
+
+**文件**: `src/renderer/utils/markdownParser.ts`
+
+用于从 AI 返回的 Markdown 文本中提取结构化字段。
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `parseMarkdownFields` | `(text: string): Record<string, string>` | 提取 `**字段名**：内容` 格式，支持多行内容，自动匹配到下一个字段或结束 |
+| `cleanMarkdown` | `(text: string): string` | 去除粗体标记 `**`、列表标记 `-•·`、压缩空行 |
+| `extractNameFromText` | `(text: string): string` | 优先匹配 `**姓名**：XXX`，其次 `姓名：XXX`，兜底取首行 2-6 字词 |
+
+**正则解析核心**：
+```typescript
+/\*\*([^*]+?)\*\*[：:\s]*\n?([\s\S]*?)(?=(?:\*\*[^*]+?\*\*[：:\s])|$)/g
 ```
 
----
+### 推导结果解析器
 
-## 📦 模块详解
+**文件**: `src/renderer/utils/deduceParser.ts`
 
-### 1. 一键推导 (`/deduce`)
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `parseDeduceResult` | `(text: string): Partial<OneClickResult>` | 解析 AI 返回的完整推导文本，提取标题/简介/主角/配角/世界观/剧情线/章节/首章 |
+| `parseSupportingChars` | `(text: string, now: number, defaultGender?: string): Character[]` | 按 Markdown 格式解析配角列表，返回完整的 `Character` 对象数组 |
 
-**核心文件**: `src/renderer/core/deduce/index.tsx`
+**配角解析支持格式**：
+- `- 名字：描述` / `**名字**：描述` / `姓名: XXX`
+- 自动提取：姓名、性别、年龄、职业、外貌、性格、背景、能力、关系
 
-| 函数 | 说明 |
-|------|------|
-| `callAIModelStream()` | SSE 流式调用 AI API，逐 token 收集 |
-| `extractBlock(text, keywords)` | 通用 Markdown 块提取器，支持 `#` / `##` / `**` / `【】` / `第X章` 等格式 |
-| `parseDeduceResult(aiText)` | 解析 AI 返回文本 → 提取标题/简介/章节/配角/世界观/剧情线 |
+### 统一转换层
 
-**流程**: 用户输入主题 → 加载 `prompts.md` 模板 → 替换变量 → 调用 AI 流式 API → `parseDeduceResult` 解析 → 存入 Store → 用户保存/放弃
-
-**解析器支持格式**:
-- 章节: `第X章 标题` / `## 第X章` / `### 第X章` / `Chapter X`
-- 配角: `- 名字：描述` / `**名字**：描述` / 姓名: XXX
-- 世界观: `规则` / `地点` / `时间线` 区块自动提取
-- 感情线: 从 `感情线` 区块提取编号事件，无则从章节生成
-
-#### 统一转换层 (`src/renderer/utils/deduceTransformer.ts`)
+**文件**: `src/renderer/utils/deduceTransformer.ts`
 
 `parseDeduceResult()` 解析出原始 JSON 后，`transformDeduceToAppData()` 将其转换为前端所有 6 个可视化模块的完整数据。
 
 | 函数 | 说明 | 输出给 |
 |------|------|--------|
 | `transformDeduceToAppData(input)` | **统一入口**，一次调用生成全部模块所需数据 | 全部模块 |
+| `parseProtagonist(text, now)` | 主角 Markdown 结构化解析，返回完整 `Character` | 角色管理 |
 | `buildRelationships(chars)` | 自动生成角色双向关系：主角↔配角(相识)、主角↔反派(对立)、配角之间(同伴/相识) | 关系图谱 ReactFlow edges |
 | `buildEmotionEvents(events, chapters, charIds, adultMode?)` | 从 plotLine.events 或 chapters 生成感情线事件，type 自动轮换 `emotion→conflict→climax→adult` | 感情线时间轴 |
 | `buildOutline(events, chapters)` | 从 events 或 chapters 生成大纲节点，最后兜底 4 幕默认结构 | 剧情大纲编辑区 |
 
-**数据流**:
+**数据流**：
 ```
 AI 原始文本
   → parseDeduceResult()         [提取原始 JSON]
     → transformDeduceToAppData() [统一转换]
+      ├── parseProtagonist()     → protagonist Character 对象
+      ├── parseSupportingChars() → supporting Character[] 数组
       ├── buildRelationships()   → characters[].relationships 填充 → ReactFlow edges
       ├── buildEmotionEvents()   → emotionEvents[] 生成         → 感情线时间轴
       ├── buildOutline()         → outlineNodes[] 生成           → 大纲编辑区
@@ -243,7 +206,7 @@ AI 原始文本
 ```
 
 **关系生成示例**（3 个角色：主角 + 女配角 + 男反派）：
-```
+```typescript
 主角.relationships = [
   { targetId: 女配角.id, type: '相识' },
   { targetId: 男反派.id, type: '对立' }
@@ -265,6 +228,27 @@ AI 原始文本
 ...
 至少保证 3 个事件，最多取 8 个。
 ```
+
+---
+
+## 模块详解
+
+### 1. 一键推导 (`/deduce`)
+
+**核心文件**: `src/renderer/core/deduce/index.tsx`
+
+| 函数 | 说明 |
+|------|------|
+| `callAIModelStream()` | SSE 流式调用 AI API，逐 token 收集 |
+| `extractBlock(text, keywords)` | 通用 Markdown 块提取器，支持 `#` / `##` / `**` / `【】` / `第X章` 等格式 |
+| `parseDeduceResult(aiText)` | 解析 AI 返回文本 → 提取标题/简介/章节/配角/世界观/剧情线 |
+| `handleReDeduce()` | 重新推导，调用 `setNovel(null)` 仅清除项目数据，保留 AI 模型等全局配置 |
+
+**解析器支持格式**:
+- 章节: `第X章 标题` / `## 第X章` / `### 第X章` / `Chapter X`
+- 配角: `- 名字：描述` / `**名字**：描述` / 姓名: XXX
+- 世界观: `规则` / `地点` / `时间线` 区块自动提取
+- 感情线: 从 `感情线` 区块提取编号事件，无则从章节生成
 
 ---
 
@@ -450,6 +434,7 @@ interface GraphEdge {
 - 内置预设：DeepSeek / 月之暗面 / 通义千问 / 百度千帆 / 硅基流动
 - 当前字段：名称 / Base URL / API Key / 模型 ID / Temperature / Max Tokens / Stream
 - 功能：测试连接 / 获取模型列表 / 编辑已添加模型
+- **自动显示名称**：切换模型类型时，如名称为空或仍是默认类型名，自动填入当前模型类型
 - 持久化存储，每次启动自动还原当前模型
 
 ---
@@ -508,7 +493,7 @@ interface GraphEdge {
 
 ---
 
-## 📐 类型系统
+## 类型系统
 
 **核心文件**: `src/config/types.ts`
 
@@ -541,7 +526,7 @@ Memory              // 记忆（type/content/source/tags）
 AIModel             // AI 模型（apiKey/baseUrl/modelId/temperature/maxTokens/stream）
 Conversation        // 对话会话（messages[]/context）
 Log                 // 日志（type/message/detail/timestamp）
-Volume              // 卷
+Volume              // 卷（id/novelId/name/summary/order/chapters[]）
 OneClickResult      // 一键推导结果
 PolishResult        // 润色结果
 TagExpansionResult  // 标签扩展结果
@@ -552,7 +537,7 @@ AppState            // 应用全局状态
 
 ---
 
-## 🤖 AI 模型配置
+## AI 模型配置
 
 | 类型 | 服务商 | 配置示例 |
 |------|--------|----------|
@@ -560,11 +545,11 @@ AppState            // 应用全局状态
 | 国产 | DeepSeek / 月之暗面 / 通义千问 / 百度千帆 / 硅基流动 | 内置预设，一键添加 |
 | 本地 | Ollama / 兼容 OpenAI API | 自定义 Base URL，如 `http://localhost:11434/v1` |
 
-支持自定义 Temperature（0-2）、Max Tokens、Stream 开关。添加后可测试连接和获取模型列���。
+支持自定义 Temperature（0-2）、Max Tokens、Stream 开关。添加后可测试连接和获取模型列表。
 
 ---
 
-## 💾 数据持久化
+## 数据持久化
 
 使用 Zustand `persist` 中间件 + `localStorage`：
 
@@ -577,7 +562,7 @@ AppState            // 应用全局状态
 
 ---
 
-## 📡 工具函数
+## 工具函数
 
 ### `src/renderer/utils/promptLoader.ts`
 
@@ -591,7 +576,7 @@ AppState            // 应用全局状态
 
 ---
 
-## 📦 打包构建
+## 打包构建
 
 ```bash
 # 构建前端 + Electron 主进程
@@ -616,7 +601,69 @@ npm run pack
 
 ---
 
-## 📄 许可证
+## 项目结构
+
+```
+private-novel-studio-pro/
+├── electron/
+│   ├── main.ts              # Electron 主进程（窗口创建、生命周期）
+│   └── preload.ts           # preload 桥接脚本
+├── assets/                   # 图标等静态资源
+├── public/                   # 公共静态文件
+├── src/
+│   ├── config/
+│   │   ├── types.ts          # 全局类型定义（16+ 接口 + 13+ 类型别名）
+│   │   └── prompts/          # AI 提示词 .md 文件（编译时 glob 导入）
+│   ├── main/
+│   │   └── index.ts          # Electron 主进程入口
+│   ├── renderer/
+│   │   ├── App.tsx           # 应用入口 + beforeunload 持久化
+│   │   ├── main.tsx          # React render 入口
+│   │   ├── index.css         # 全局样式（滚动条/选择颜色）
+│   │   ├── components/
+│   │   │   ├── PageWrapper.tsx    # 页面统一布局包装器
+│   │   │   ├── Sidebar.tsx        # 侧边栏导航
+│   │   │   ├── ErrorBoundary.tsx  # 错误边界
+│   │   │   └── tagPrompts.ts      # 标签提示词（旧副本）
+│   │   ├── constants/
+│   │   │   ├── character.ts       # 角色系统常量（48性格标签/40头像/6预设模板）
+│   │   │   └── tagPrompts.ts      # 标签系统常量配置
+│   │   ├── core/                  # 核心创作功能
+│   │   │   ├── deduce/            # 一键推导
+│   │   │   ├── longPlan/          # 长篇规划
+│   │   │   ├── continue/          # 续写
+│   │   │   └── polish/            # 润色 & AI味检测
+│   │   ├── modules/               # 辅助业务模块
+│   │   │   ├── character/         # 角色管理
+│   │   │   ├── world/             # 世界观
+│   │   │   ├── plotView/          # 剧情可视化
+│   │   │   ├── tags/              # 智能标签
+│   │   │   ├── memory/            # 记忆系统
+│   │   │   └── chat/              # AI 对话
+│   │   ├── pages/                 # 路由页面
+│   │   │   ├── dashboard/         # 首页
+│   │   │   ├── aiModel/           # AI 模型配置
+│   │   │   ├── logs/              # 日志查看
+│   │   │   └── settings/          # 设置中心
+│   │   ├── store/
+│   │   │   └── index.ts           # Zustand 全局状态（700+ 行）
+│   │   └── utils/
+│   │       ├── promptLoader.ts    # 提示词加载工具
+│   │       ├── markdownParser.ts  # Markdown 字段提取工具
+│   │       ├── deduceParser.ts    # 推导结果原始解析器
+│   │       ├── deduceTransformer.ts # 统一转换层
+│   │       └── characterAI.ts     # 角色 AI 辅助工具
+│   ├── index.css
+│   └── main.tsx
+├── package.json
+├── vite.config.ts
+├── tsconfig.json
+└── README.md
+```
+
+---
+
+## 许可证
 
 MIT License
 

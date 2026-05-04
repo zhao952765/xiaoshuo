@@ -47,6 +47,25 @@ export default function PlotView() {
     order: number
   }>>(storeEmotionEvents || [])
 
+  // 感情线类型筛选
+  const [emotionFilter, setEmotionFilter] = useState<'all' | 'emotion' | 'conflict' | 'climax' | 'adult'>('all')
+
+  const emotionTypeConfig: Record<string, { label: string; color: string; icon: string }> = {
+    emotion:  { label: '感情', color: '#ec4899', icon: '💕' },
+    adult:    { label: '肉欲', color: '#f43f5e', icon: '🔥' },
+    conflict: { label: '冲突', color: '#f59e0b', icon: '⚡' },
+    climax:   { label: '高潮', color: '#a855f7', icon: '⭐' },
+  }
+
+  // 过滤后的感情线事件（按筛选类型 + adultMode 联动）
+  const filteredEmotionEvents = emotionEvents.filter((e) => {
+    // 非成人模式下隐藏 adult 类型
+    if (!adultMode && e.type === 'adult') return false
+    // 按筛选类型过滤
+    if (emotionFilter !== 'all' && e.type !== emotionFilter) return false
+    return true
+  })
+
   // 只在 novel 对象变化时（推导完成/切换项目）同步一次数据
   const novelId = novel?.id
   useEffect(() => {
@@ -363,11 +382,50 @@ export default function PlotView() {
           </div>
         )}
 
-        {/* ===== 感情线（问题4：空事件时有默认生成按钮） ===== */}
+        {/* ===== 感情线（修复1：全部4种类型 + 类型筛选） ===== */}
         {activeTab === 'emotion' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ color: '#888', fontSize: '13px' }}>管理感情发展与肉欲情节的时间线</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {/* 类型筛选按钮组 */}
+                <button
+                  onClick={() => setEmotionFilter('all')}
+                  style={{
+                    padding: '5px 12px',
+                    background: emotionFilter === 'all' ? 'rgba(99,102,241,0.15)' : 'transparent',
+                    border: `1px solid ${emotionFilter === 'all' ? 'rgba(99,102,241,0.3)' : '#2a2a2a'}`,
+                    borderRadius: '6px',
+                    color: emotionFilter === 'all' ? '#818cf8' : '#888',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    fontWeight: 500,
+                  }}
+                >
+                  全部
+                </button>
+                {Object.entries(emotionTypeConfig).map(([key, cfg]) => {
+                  // 非成人模式下隐藏肉欲筛选按钮
+                  if (!adultMode && key === 'adult') return null
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setEmotionFilter(key as typeof emotionFilter)}
+                      style={{
+                        padding: '5px 12px',
+                        background: emotionFilter === key ? `${cfg.color}20` : 'transparent',
+                        border: `1px solid ${emotionFilter === key ? `${cfg.color}50` : '#2a2a2a'}`,
+                        borderRadius: '6px',
+                        color: emotionFilter === key ? cfg.color : '#888',
+                        fontSize: '12px',
+                        cursor: 'pointer',
+                        fontWeight: 500,
+                      }}
+                    >
+                      {cfg.icon} {cfg.label}
+                    </button>
+                  )
+                })}
+              </div>
               {emotionEvents.length > 0 ? (
                 <button
                   onClick={() => {
@@ -395,7 +453,7 @@ export default function PlotView() {
               ) : null}
             </div>
 
-            {emotionEvents.filter((e) => adultMode || e.type === 'emotion' || e.type === 'conflict' || e.type === 'climax').length === 0 ? (
+            {filteredEmotionEvents.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '60px 0' }}>
                 <p style={{ color: '#666', marginBottom: '16px' }}>暂无感情线事件</p>
                 <button
@@ -423,7 +481,7 @@ export default function PlotView() {
                 </button>
               </div>
             ) : (
-                emotionEvents.filter((e) => adultMode || e.type === 'emotion' || e.type === 'conflict' || e.type === 'climax').map((evt, idx) => (
+                filteredEmotionEvents.map((evt, idx) => (
                   <div key={evt.id} style={{ position: 'relative', marginBottom: '16px' }}>
                     {/* 节点圆点 */}
                     <div style={{
@@ -433,9 +491,9 @@ export default function PlotView() {
                       width: '14px',
                       height: '14px',
                       borderRadius: '50%',
-                      background: evt.type === 'adult' ? '#ef4444' : '#ec4899',
+                      background: emotionTypeConfig[evt.type]?.color || '#ec4899',
                       border: '3px solid #1a1a1a',
-                      boxShadow: evt.type === 'adult' ? '0 0 8px rgba(239,68,68,0.4)' : '0 0 8px rgba(236,72,153,0.4)',
+                      boxShadow: `0 0 8px ${emotionTypeConfig[evt.type]?.color || '#ec4899'}60`,
                     }} />
 
                     {/* 事件卡片 */}
@@ -454,10 +512,10 @@ export default function PlotView() {
                           }}
                           style={{
                             padding: '6px 10px',
-                            background: evt.type === 'adult' ? 'rgba(239,68,68,0.15)' : evt.type === 'conflict' ? 'rgba(245,158,11,0.15)' : evt.type === 'climax' ? 'rgba(168,85,247,0.15)' : 'rgba(236,72,153,0.15)',
-                            border: `1px solid ${evt.type === 'adult' ? 'rgba(239,68,68,0.3)' : evt.type === 'conflict' ? 'rgba(245,158,11,0.3)' : evt.type === 'climax' ? 'rgba(168,85,247,0.3)' : 'rgba(236,72,153,0.3)'}`,
+                            background: `${emotionTypeConfig[evt.type]?.color || '#ec4899'}20`,
+                            border: `1px solid ${emotionTypeConfig[evt.type]?.color || '#ec4899'}50`,
                             borderRadius: '6px',
-                            color: evt.type === 'adult' ? '#f87171' : evt.type === 'conflict' ? '#facc15' : evt.type === 'climax' ? '#c084fc' : '#f472b6',
+                            color: emotionTypeConfig[evt.type]?.color || '#f472b6',
                             fontSize: '12px',
                             fontWeight: 600,
                             cursor: 'pointer',
@@ -465,9 +523,9 @@ export default function PlotView() {
                           }}
                         >
                           <option value="emotion" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>💕 感情线</option>
-                          <option value="conflict" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>⚔️ 冲突</option>
-                          <option value="climax" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>🔥 高潮</option>
-                          <option value="adult" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>🔞 肉欲线</option>
+                          <option value="conflict" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>⚡ 冲突</option>
+                          <option value="climax" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>⭐ 高潮</option>
+                          <option value="adult" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>🔥 肉欲线</option>
                         </select>
 
                         <input
@@ -603,7 +661,11 @@ export default function PlotView() {
             {emotionEvents.length > 0 && (
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <button
-                  onClick={() => updateNovel({ title: editTitle, summary: editSummary, outlineNodes, emotionEvents } as any)}
+                  onClick={() => {
+                    updateNovel({ title: editTitle, summary: editSummary })
+                    updateEmotionEvents(emotionEvents)
+                    updateOutlineNodes(outlineNodes)
+                  }}
                   style={{
                     padding: '10px 28px',
                     background: '#6366f1',

@@ -123,6 +123,10 @@ export default function AIModel() {
     setForm((prev) => ({
       ...prev,
       modelType: type,
+      // 自动填充显示名称：如果 name 为空或是上一个类型的默认名，则自动更新
+      name: !prev.name || Object.keys(DEFAULTS).some((k) => prev.name === k)
+        ? type
+        : prev.name,
       baseUrl: defaults.baseUrl || prev.baseUrl,
       modelId: defaults.modelId || prev.modelId,
       temperature: defaults.temperature ?? prev.temperature,
