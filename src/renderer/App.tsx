@@ -1,5 +1,8 @@
+import { useEffect } from 'react'
 import { HashRouter, Routes, Route } from 'react-router-dom'
+import { useStore } from './store'
 import Sidebar from './components/Sidebar'
+import ErrorBoundary from './components/ErrorBoundary'
 import Dashboard from './pages/dashboard'
 import Deduce from './core/deduce'
 import LongPlan from './core/longPlan'
@@ -16,6 +19,13 @@ import Logs from './pages/logs'
 import Settings from './pages/settings'
 
 function App() {
+  const validateCurrentModel = useStore((s) => s.validateCurrentModel)
+
+  useEffect(() => {
+    // 启动时校验 AI 模型状态：持久化的 currentModel 若不存在则自动选第一个
+    validateCurrentModel()
+  }, [])
+
   return (
     <HashRouter>
       <div style={{ display: 'flex', height: '100vh', width: '100vw', background: '#0f0f0f', color: '#e0e0e0', overflow: 'hidden' }}>
@@ -27,6 +37,7 @@ function App() {
           display: 'block',
           textAlign: 'left'
         }}>
+          <ErrorBoundary>
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/deduce" element={<Deduce />} />
@@ -43,6 +54,7 @@ function App() {
             <Route path="/logs" element={<Logs />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
+          </ErrorBoundary>
         </main>
       </div>
     </HashRouter>

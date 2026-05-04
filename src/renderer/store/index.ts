@@ -31,6 +31,10 @@ interface StoreState {
   logs: Log[]
   conversations: Conversation[]
 
+  // ========== 推导结果衍生数据 ==========
+  emotionEvents: Array<{ id: string; title: string; description: string; type: 'emotion' | 'adult'; characterIds: string[]; order: number }>
+  outlineNodes: Array<{ id: string; title: string; content: string; order: number }>
+
   // ========== UI 状态 ==========
   isLoading: boolean
   adultMode: boolean
@@ -96,6 +100,7 @@ interface StoreActions {
   removeModel: (id: string) => void
   updateModel: (id: string, partial: Partial<AIModel>) => void
   setDefaultModel: (id: string) => void
+  validateCurrentModel: () => void
 
   // ========== 日志 ==========
   addLog: (log: Omit<Log, 'id' | 'timestamp'>) => void
@@ -148,6 +153,8 @@ const initialState: StoreState = {
   isLoading: false,
   adultMode: false,
   selectedTagIds: [],
+  emotionEvents: [],
+  outlineNodes: [],
   fontSize: 'medium',
   autoSaveInterval: 5,
   autoBackup: false,
@@ -405,6 +412,15 @@ export const useAppStore = create<StoreState & StoreActions>()(
           aiModels: state.aiModels.map((m) => ({ ...m, isDefault: m.id === id })),
           currentModel: state.aiModels.find((m) => m.id === id) ?? state.currentModel,
         })),
+      validateCurrentModel: () => {
+        const state = get()
+        if (state.currentModel && !state.aiModels.some((m) => m.id === state.currentModel!.id)) {
+          set({ currentModel: state.aiModels[0] ?? null })
+        }
+        if (!state.currentModel && state.aiModels.length > 0) {
+          set({ currentModel: state.aiModels[0] })
+        }
+      },
 
       // ----- 日志 -----
       addLog: (log) =>
@@ -455,14 +471,28 @@ export const useAppStore = create<StoreState & StoreActions>()(
       // ----- 一键推导结果导入 -----
       importFromDeduce: (result) =>
         set((state) => {
-          const protagonist = result.protagonist
-          const supporting = result.supporting
-          const allChars = [protagonist, ...supporting]
+          // 安全降级
+          const safeResult = {
+            title: result.title || '未命名项目',
+            summary: result.summary || '',
+            protagonist: result.protagonist || { id: genId(), name: '主角', roleType: 'protagonist' as const, avatar: '', basicInfo: { age: '', gender: '', occupation: '' }, appearance: '', personality: [], background: '', abilities: '', relationships: [], voice: '', innerWorld: '', arc: '', tags: [], createdAt: Date.now(), updatedAt: Date.now() },
+            supporting: result.supporting || [],
+            worldSetting: result.worldSetting || { id: genId(), name: '默认世界观', worldType: 'custom' as const, description: '', overview: '', rules: [], locations: [], timeline: [], society: '', culture: '', economy: '', createdAt: Date.now(), updatedAt: Date.now() },
+            plotLine: result.plotLine || { id: genId(), type: 'main' as const, name: '主线', description: '', events: [], relatedCharacters: [], createdAt: Date.now(), updatedAt: Date.now() },
+            chapters: result.chapters?.length > 0 ? result.chapters : [
+              { title: '第一章 开端', summary: '故事开始...' },
+              { title: '第二章 发展', summary: '冲突升级...' },
+              { title: '第三章 转折', summary: '意外发现...' },
+              { title: '第四章 高潮', summary: '最终对决...' },
+              { title: '第五章 结局', summary: '尘埃落定...' },
+            ],
+            firstChapter: result.firstChapter || '',
+          }
+
+          const allChars = [safeResult.protagonist, ...safeResult.supporting]
           const charIds = allChars.map((c) => c.id)
 
-          const ws = result.worldSetting
-          const plot = result.plotLine
-          const newChapters = result.chapters.map((ch, index) => ({
+          const newChapters = safeResult.chapters.map((ch: any, index: number) => ({
             id: genId(),
             title: ch.title,
             summary: ch.summary,
@@ -479,17 +509,46 @@ export const useAppStore = create<StoreState & StoreActions>()(
             updatedAt: Date.now(),
           }))
 
+          // 生成感情线事件
+          const plotEvents = safeResult.plotLine.events || []
+          const emotionEvents = [
+            ...plotEvents.slice(0, 3).map((e: any, idx: number) => ({
+              id: genId(),
+              title: e.title || `感情事件 ${idx + 1}`,
+              description: e.description || '',
+              type: (safeResult.plotLine.type === 'erotic' ? 'adult' : 'emotion') as 'emotion' | 'adult',
+              characterIds: charIds.slice(0, 2),
+              order: idx,
+            })),
+            ...Array.from({ length: Math.max(0, 3 - plotEvents.length) }, (_, i) => ({
+              id: genId(),
+              title: `感情发展 ${plotEvents.length + i + 1}`,
+              description: '待补充感情线描述...',
+              type: 'emotion' as const,
+              characterIds: charIds.slice(0, 2),
+              order: plotEvents.length + i,
+            })),
+          ]
+
+          // 生成剧情大纲节点
+          const outlineNodes = newChapters.slice(0, 5).map((ch: any, idx: number) => ({
+            id: genId(),
+            title: ch.title,
+            content: ch.summary,
+            order: idx,
+          }))
+
           const novel: Novel = {
             id: genId(),
-            title: result.title,
-            summary: result.summary,
+            title: safeResult.title,
+            summary: safeResult.summary,
             adultMode: state.adultMode,
             tags: [],
             targetWords: '30000',
             characters: charIds,
-            worldSettings: [ws.id],
+            worldSettings: [safeResult.worldSetting.id],
             chapters: newChapters.map((c) => c.id),
-            plotLines: [plot.id],
+            plotLines: [safeResult.plotLine.id],
             createdAt: Date.now(),
             updatedAt: Date.now(),
           }
@@ -497,9 +556,11 @@ export const useAppStore = create<StoreState & StoreActions>()(
           return {
             currentNovel: novel,
             characters: [...state.characters, ...allChars],
-            worldSettings: [...state.worldSettings, ws],
-            plotLines: [...state.plotLines, plot],
+            worldSettings: [...state.worldSettings, safeResult.worldSetting],
+            plotLines: [...state.plotLines, safeResult.plotLine],
             chapters: [...state.chapters, ...newChapters],
+            emotionEvents,
+            outlineNodes,
           }
         }),
 
@@ -559,10 +620,23 @@ export const useAppStore = create<StoreState & StoreActions>()(
       loadProject: (data) => {
         if (!data || typeof data !== 'object') return
         const d = data as Record<string, unknown>
+
+        // 兼容旧数据：补充新字段默认值
+        const novel = (d.currentNovel as any) || null
+        if (novel) {
+          if (!novel.emotionEvents) novel.emotionEvents = []
+          if (!novel.outlineNodes) novel.outlineNodes = []
+        }
+
         const currentModelId = d.currentModelId as string | null
 
+        const loadedModels = (d.aiModels as AIModel[] | undefined) ?? []
+        const loadedCurrentModel = currentModelId
+          ? loadedModels.find((m) => m.id === currentModelId) ?? null
+          : null
+
         set({
-          currentNovel: (d.currentNovel as Novel | undefined) ?? null,
+          currentNovel: novel as Novel | null,
           characters: (d.characters as Character[] | undefined) ?? [],
           worldSettings:
             (d.worldSettings as WorldSetting[] | undefined) ?? [],
@@ -570,15 +644,12 @@ export const useAppStore = create<StoreState & StoreActions>()(
           volumes: (d.volumes as Volume[] | undefined) ?? [],
           plotLines: (d.plotLines as PlotLine[] | undefined) ?? [],
           tags: (d.tags as Tag[] | undefined) ?? [],
-          aiModels: (d.aiModels as AIModel[] | undefined) ?? [],
-          currentModel:
-            currentModelId
-              ? ((d.aiModels as AIModel[] | undefined) ?? []).find(
-                  (m) => m.id === currentModelId
-                ) ?? null
-              : null,
+          aiModels: loadedModels,
+          currentModel: loadedCurrentModel ?? loadedModels[0] ?? null,
           adultMode: (d.adultMode as boolean | undefined) ?? false,
           conversations: (d.conversations as Conversation[] | undefined) ?? [],
+          emotionEvents: (d as any).emotionEvents || [],
+          outlineNodes: (d as any).outlineNodes || [],
         })
       },
 
@@ -600,6 +671,8 @@ export const useAppStore = create<StoreState & StoreActions>()(
         currentModel: state.currentModel,
         adultMode: state.adultMode,
         conversations: state.conversations,
+        emotionEvents: state.emotionEvents,
+        outlineNodes: state.outlineNodes,
         fontSize: state.fontSize,
         autoSaveInterval: state.autoSaveInterval,
         autoBackup: state.autoBackup,
@@ -611,5 +684,6 @@ export const useAppStore = create<StoreState & StoreActions>()(
   )
 )
 
-// 别名导出，兼容 useStore 用法
-export const useStore = useAppStore
+// 统一导出，兼容 useStore 和 useAppStore 两种导入
+export { useAppStore as useStore }
+export default useAppStore

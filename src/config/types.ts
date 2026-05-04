@@ -68,6 +68,20 @@ export interface Novel {
   plotLines: string[];
   createdAt: number;
   updatedAt: number;
+  emotionEvents?: Array<{
+    id: string;
+    title: string;
+    description: string;
+    type: 'emotion' | 'adult';
+    characterIds: string[];
+    order: number;
+  }>;
+  outlineNodes?: Array<{
+    id: string;
+    title: string;
+    content: string;
+    order: number;
+  }>;
 }
 
 /**

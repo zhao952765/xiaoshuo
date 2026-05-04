@@ -411,6 +411,8 @@ export default function DeducePage() {
 
   const aiModels = useAppStore((s) => s.aiModels)
   const currentModel = useAppStore((s) => s.currentModel)
+  const currentNovel = useAppStore((s) => s.currentNovel)
+  const resetAll = useAppStore((s) => s.resetAll)
   const adultMode = useAppStore((s) => s.adultMode)
   const importFromDeduce = useAppStore((s) => s.importFromDeduce)
   const addLog = useAppStore((s) => s.addLog)
@@ -430,6 +432,16 @@ export default function DeducePage() {
   const [error, setError] = useState<string | null>(null)
 
   const streamRef = useRef('')
+
+  const handleReDeduce = () => {
+    if (!confirm('重新推导会清空当前所有数据（角色、章节、世界观等），确定吗？')) return
+    resetAll()
+    setTheme('')
+    setProgress(0)
+    setProgressLabel('')
+    setStreamText('')
+    setError(null)
+  }
 
   const selectedModel =
     aiModels.find((m) => m.id === selectedModelId) || currentModel
@@ -542,30 +554,24 @@ export default function DeducePage() {
       setProgressLabel('正在保存到项目...')
       importFromDeduce(result)
 
-      // 将第一章正文写入到 store 的第一章中
-      const state = useAppStore.getState()
-      const firstCh = state.chapters
-        .slice()
-        .sort((a, b) => a.order - b.order)[0]
+      // 将第一章正文写入 store
+      const storeState = useAppStore.getState()
+      const firstCh = storeState.chapters.slice().sort((a, b) => a.order - b.order)[0]
       if (firstCh && result.firstChapter) {
         updateChapter(firstCh.id, { content: result.firstChapter })
       }
 
-      addLog({
-        type: 'success',
-        message: `一键推导完成：${result.title}`,
-        detail: `主题：${theme.trim()}，共生成 ${result.chapters.length} 章，角色 ${
-          1 + result.supporting.length
-        } 人`,
-      })
+      // 等待 React 状态更新完成
+      await new Promise((resolve) => setTimeout(resolve, 150))
 
       setProgress(100)
       setProgressLabel('推导完成！即将跳转到剧情可视化...')
+      setLoading(false)
 
-      setTimeout(() => {
-        setLoading(false)
-        navigate('/plot')
-      }, 900)
+      addLog({ type: 'success', message: `一键推导完成：${result.title}`, detail: `主题：${theme.trim()}，共生成 ${result.chapters.length} 章，角色 ${1 + result.supporting.length} 人` })
+
+      // 安全跳转
+      setTimeout(() => navigate('/plotview'), 300)
     } catch (err) {
       const msg = err instanceof Error ? err.message : '未知错误'
       setError(`推导失败：${msg}`)
@@ -591,8 +597,17 @@ export default function DeducePage() {
   return (
     <PageWrapper
       title="一键推导"
-      subtitle="输入主题或关键词，AI 将为你生成完整的小说结构、角色设定、世界观和章节目录"
+      subtitle={currentNovel ? `当前项目：${currentNovel.title}` : '输入主题或关键词，AI 将为你生成完整的小说结构、角色设定、世界观和章节目录'}
     >
+      {/* 重新推导提示 */}
+      {currentNovel && (
+        <div style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '10px', padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ color: '#818cf8', fontSize: '14px' }}>⚠️ 已有项目数据，重新推导将覆盖现有内容</span>
+          <button onClick={handleReDeduce} style={{ padding: '6px 16px', background: '#ef4444', border: 'none', borderRadius: '6px', color: '#fff', fontSize: '13px', cursor: 'pointer' }}>
+            🔄 重新推导
+          </button>
+        </div>
+      )}
       {/* 输入面板 */}
       <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '12px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
         {/* 主题输入 */}

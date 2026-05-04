@@ -1,6 +1,13 @@
 {
   "name": "private-novel-studio-pro",
   "version": "1.0.0",
+  "description": "私人小说创作工作室 — AI 辅助小说创作桌面应用",
+  "author": "Private Novel Studio Pro",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/private-novel-studio-pro"
+  },
   "type": "module",
   "main": "dist/main/index.js",
   "scripts": {

@@ -21,13 +21,18 @@ export default function PlotView() {
   const chapters = useStore((s) => s.chapters)
   const worlds = useStore((s) => s.worldSettings)
   const updateNovel = useStore((s) => s.updateNovel)
+  const adultMode = useStore((s) => s.adultMode)
+
+  // 从根状态读取，不依赖 novel 嵌套字段
+  const storeEmotionEvents = useStore((s) => (s as any).emotionEvents || [])
+  const storeOutlineNodes = useStore((s) => (s as any).outlineNodes || [])
 
   const [editTitle, setEditTitle] = useState(novel?.title || '')
   const [editSummary, setEditSummary] = useState(novel?.summary || '')
 
   // ========== 剧情大纲状态 ==========
   const [outlineNodes, setOutlineNodes] = useState<Array<{ id: string; title: string; content: string }>>(
-    (novel as any)?.outlineNodes || []
+    storeOutlineNodes || []
   )
 
   // ========== 感情线状态 ==========
@@ -37,17 +42,17 @@ export default function PlotView() {
     description: string
     type: 'emotion' | 'adult'
     characterIds: string[]
-  }>>( (novel as any)?.emotionEvents || [] )
+  }>>(storeEmotionEvents || [])
 
   useEffect(() => {
     setEditTitle(novel?.title || '')
     setEditSummary(novel?.summary || '')
-    setOutlineNodes((novel as any)?.outlineNodes || [])
-    setEmotionEvents((novel as any)?.emotionEvents || [])
-  }, [novel])
+    setOutlineNodes(storeOutlineNodes || [])
+    setEmotionEvents(storeEmotionEvents || [])
+  }, [novel, storeEmotionEvents, storeOutlineNodes])
 
   const saveSummary = () => {
-    updateNovel({ title: editTitle, summary: editSummary, outlineNodes, emotionEvents } as any)
+    updateNovel({ title: editTitle, summary: editSummary } as any)
   }
 
   // ========== 剧情大纲操作 ==========
@@ -94,15 +99,17 @@ export default function PlotView() {
   }))
 
   const initialEdges = (characters.flatMap((char) =>
-    (char.relationships || []).map((rel: any, idx: number) => ({
-      id: `e-${char.id}-${rel.targetId || idx}`,
-      source: char.id,
-      target: rel.targetId || char.id,
-      label: rel.type || '关系',
-      style: { stroke: '#6366f1', strokeWidth: 2 },
-      labelStyle: { fill: '#888', fontSize: 12 },
-      animated: true,
-    }))
+    (char.relationships || [])
+      .filter((rel: any) => characters.some((c) => c.id === rel.targetId))
+      .map((rel: any) => ({
+        id: `e-${char.id}-${rel.targetId}`,
+        source: char.id,
+        target: rel.targetId,
+        label: rel.type || '关系',
+        style: { stroke: '#6366f1', strokeWidth: 2 },
+        labelStyle: { fill: '#888', fontSize: 12 },
+        animated: true,
+      }))
   ) as any[]).filter((e) => e.source !== e.target)
 
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState(initialNodes)
@@ -119,8 +126,39 @@ export default function PlotView() {
     setRfEdges(initialEdges)
   }, [characters.length])
 
+  if (!novel) {
+    return (
+      <PageWrapper title="剧情观可视化" subtitle="请先使用一键推导生成小说数据">
+        <div style={{ textAlign: 'center', padding: '100px 0' }}>
+          <div style={{ fontSize: '64px', marginBottom: '20px' }}>📭</div>
+          <h3 style={{ color: '#888', fontSize: '18px', marginBottom: '8px' }}>暂无项目数据</h3>
+          <p style={{ color: '#666', fontSize: '14px' }}>请先使用左侧"一键推导"功能创建项目</p>
+          <button
+            onClick={() => window.location.hash = '#/deduce'}
+            style={{ marginTop: '20px', padding: '10px 24px', background: '#6366f1', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '14px', cursor: 'pointer' }}
+          >
+            去一键推导
+          </button>
+        </div>
+      </PageWrapper>
+    )
+  }
+
   return (
-    <PageWrapper title="剧情观可视化" subtitle="查看并编辑故事全貌，修改后自动同步到所有功能">
+    <PageWrapper
+      title="剧情观可视化"
+      subtitle={`${novel.title} · 查看并编辑故事全貌`}
+      actions={
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            onClick={() => window.location.hash = '#/deduce'}
+            style={{ padding: '8px 16px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', cursor: 'pointer' }}
+          >
+            🔄 重新推导
+          </button>
+        </div>
+      }
+    >
       {/* 标签切换栏 */}
       <div style={{ display: 'flex', gap: '4px', borderBottom: '1px solid #2a2a2a' }}>
         {tabs.map((tab) => (
@@ -230,8 +268,12 @@ export default function PlotView() {
                 {characters.map((char) => (
                   <div key={char.id} style={{ background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '10px', padding: '16px' }}>
                     <div style={{ fontSize: '15px', fontWeight: 600, color: '#fff', marginBottom: '6px' }}>{char.name}</div>
-                    <div style={{ fontSize: '12px', color: '#6366f1', marginBottom: '10px' }}>{char.roleType || '角色'}</div>
-                    <div style={{ fontSize: '13px', color: '#888', lineHeight: 1.6 }}>{char.profile || '暂无简介'}</div>
+                    <div style={{ fontSize: '12px', color: '#6366f1', marginBottom: '10px' }}>
+                      {char.roleType === 'protagonist' ? '主角' : char.roleType === 'supporting' ? '配角' : char.roleType === 'antagonist' ? '反派' : '次要角色'}
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#888', lineHeight: 1.6, marginBottom: '6px' }}>{char.appearance || '暂无外貌描述'}</div>
+                    <div style={{ fontSize: '12px', color: '#666', lineHeight: 1.6, marginBottom: '4px' }}>{char.background || '暂无背景'}</div>
+                    <div style={{ fontSize: '12px', color: '#a78bfa' }}>{char.personality?.join('、') || '暂无性格标签'}</div>
                   </div>
                 ))}
               </div>
@@ -249,7 +291,31 @@ export default function PlotView() {
                 {worlds.map((w) => (
                   <div key={w.id} style={{ background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '10px', padding: '16px' }}>
                     <div style={{ fontSize: '15px', fontWeight: 600, color: '#fff', marginBottom: '6px' }}>{w.name}</div>
-                    <div style={{ fontSize: '13px', color: '#888', lineHeight: 1.6 }}>{w.description || '暂无描述'}</div>
+                    <div style={{ fontSize: '13px', color: '#888', lineHeight: 1.6, marginBottom: '8px' }}>{w.overview || w.description || '暂无描述'}</div>
+                    {w.rules?.length > 0 && (
+                      <div style={{ marginBottom: '8px' }}>
+                        <div style={{ fontSize: '12px', color: '#6366f1', fontWeight: 600, marginBottom: '4px' }}>世界规则：</div>
+                        {w.rules.map((r, i) => (
+                          <div key={i} style={{ fontSize: '12px', color: '#888', lineHeight: 1.6, paddingLeft: '12px' }}>• {r.name}: {r.description}</div>
+                        ))}
+                      </div>
+                    )}
+                    {w.locations?.length > 0 && (
+                      <div style={{ marginBottom: '8px' }}>
+                        <div style={{ fontSize: '12px', color: '#10b981', fontWeight: 600, marginBottom: '4px' }}>关键地点：</div>
+                        {w.locations.map((loc, i) => (
+                          <div key={i} style={{ fontSize: '12px', color: '#888', lineHeight: 1.6, paddingLeft: '12px' }}>• {loc.name}: {loc.description}</div>
+                        ))}
+                      </div>
+                    )}
+                    {w.timeline?.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: '12px', color: '#f59e0b', fontWeight: 600, marginBottom: '4px' }}>历史时间线：</div>
+                        {w.timeline.map((t, i) => (
+                          <div key={i} style={{ fontSize: '12px', color: '#888', lineHeight: 1.6, paddingLeft: '12px' }}>• {t.era && `[${t.era}] `}{t.title}: {t.description}</div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -299,10 +365,10 @@ export default function PlotView() {
                 opacity: 0.5
               }} />
 
-              {emotionEvents.length === 0 ? (
+              {emotionEvents.filter((e) => adultMode || e.type === 'emotion').length === 0 ? (
                 <p style={{ color: '#666', padding: '40px 0' }}>暂无感情线事件，点击右上角添加</p>
               ) : (
-                emotionEvents.map((evt, idx) => (
+                emotionEvents.filter((e) => adultMode || e.type === 'emotion').map((evt, idx) => (
                   <div key={evt.id} style={{ position: 'relative', marginBottom: '16px' }}>
                     {/* 节点圆点 */}
                     <div style={{
