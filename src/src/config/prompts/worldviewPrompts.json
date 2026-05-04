@@ -1,0 +1,46 @@
+{
+  "worldTypeConfig": {
+    "campus": {"label": "校园", "icon": "🎓", "color": "#8b5cf6", "bgColor": "rgba(139, 92, 246, 0.15)", "borderColor": "rgba(139, 92, 246, 0.3)", "description": "贵族/精英校园的淫乱暗面", "placeholder": "如：顶尖贵族学院、权贵子弟的欲望乐园..."},
+    "urban": {"label": "都市", "icon": "🏙️", "color": "#3b82f6", "bgColor": "rgba(59, 130, 246, 0.15)", "borderColor": "rgba(59, 130, 246, 0.3)", "description": "现代繁华都市的黑暗欲望面", "placeholder": "如：表面光鲜的国际大都市，隐藏权色交易与地下情欲产业链..."},
+    "apocalypse": {"label": "末世", "icon": "☢️", "color": "#ef4444", "bgColor": "rgba(239, 68, 68, 0.15)", "borderColor": "rgba(239, 68, 68, 0.3)", "description": "现代文明崩塌后的肉欲废土", "placeholder": "如：秩序崩坏的辐射废土，以性换资源的原始社会..."}
+  },
+  "historyEventTypes": [
+    {"key": "war", "label": "战争/动乱", "icon": "⚔️"},
+    {"key": "economic_boom", "label": "经济爆发", "icon": "💰"},
+    {"key": "catastrophe", "label": "大灾变", "icon": "☢️"},
+    {"key": "rise", "label": "势力崛起", "icon": "📈"},
+    {"key": "fall", "label": "势力衰落", "icon": "📉"},
+    {"key": "scandal", "label": "重大丑闻", "icon": "🔥"},
+    {"key": "technological_breakthrough", "label": "技术突破", "icon": "📱"},
+    {"key": "sexual_liberation", "label": "性解放运动", "icon": "❤️‍🔥"},
+    {"key": "black_market_rise", "label": "黑市兴起", "icon": "⚖️"},
+    {"key": "corporate_merge", "label": "企业吞并", "icon": "🏢"},
+    {"key": "mass_migration", "label": "大规模迁徙", "icon": "🚶‍♀️"},
+    {"key": "government_crackdown", "label": "政府镇压", "icon": "🚨"},
+    {"key": "underground_movement", "label": "地下运动", "icon": "🕳️"},
+    {"key": "celebrity_scandal", "label": "明星性丑闻", "icon": "📸"},
+    {"key": "law_reform", "label": "法律改革", "icon": "📜"}
+  ],
+  "locationTypes": [
+    {"key": "university", "label": "大学校园", "icon": "🎓"},
+    {"key": "highschool", "label": "高级中学", "icon": "🏫"},
+    {"key": "metropolis", "label": "繁华都市", "icon": "🏙️"},
+    {"key": "downtown", "label": "市中心商业区", "icon": "🏢"},
+    {"key": "office", "label": "公司办公室", "icon": "💼"},
+    {"key": "luxury_villa", "label": "豪宅别墅", "icon": "🏡"},
+    {"key": "hotel", "label": "高档酒店", "icon": "🏨"},
+    {"key": "nightclub", "label": "夜店酒吧", "icon": "🍸"},
+    {"key": "underground_club", "label": "地下淫乱会所", "icon": "🕳️"},
+    {"key": "black_market", "label": "黑市", "icon": "⚖️"},
+    {"key": "apartment", "label": "公寓住宅区", "icon": "🏢"},
+    {"key": "subway", "label": "地铁/公交", "icon": "🚇"},
+    {"key": "bath_center", "label": "温泉会所/洗浴中心", "icon": "♨️"},
+    {"key": "gym", "label": "健身房", "icon": "🏋️"},
+    {"key": "hospital", "label": "医院", "icon": "🏥"},
+    {"key": "mall", "label": "大型商场", "icon": "🛍️"}
+  ],
+  "presetWorldviewTemplates": [
+    {"name": "淫乱贵族学院", "worldType": "campus", "description": "全国最顶尖的贵族混合学院，表面是培养精英的圣地，实际是权贵子弟玩弄女学生的淫欲乐园。校花、学生会长、女教师、富家千金都难以逃脱被潜规则与公开调教的命运", "rules": "学院默认"强者为尊"，成绩、家族背景、性能力共同决定地位。得罪权贵的女生常被送入"特殊辅导班"接受性教育和调教", "locations": "玫瑰教学楼、学生会地下调教室、贵族宿舍肉欲区、后山温泉别墅群、高级会所", "history": "十年前学院完成性禁忌改制，从此彻底成为上层社会子弟的专属欲望乐园"},
+    {"name": "欲望都市之都", "worldType": "urban", "description": "表面光鲜亮丽的国际化大都市，暗地里却是富豪、官员、明星与白领交织的淫乱世界。高档写字楼、豪宅、夜店、地铁中都隐藏着大量的性交易与权力调教", "rules": "权力、金钱与肉欲深度绑定。女性越美、地位越高，越容易成为被潜规则的对象，一旦沉沦往往难以自拔", "locations": "中央商务区顶级会所、江景豪宅后宫、大学城夜店街、地下性奴俱乐部、高端温泉酒店", "history": "近十年经济高速发展伴随性观念彻底开放，权色交易形成了一条庞大且隐秘的地下欲望产业链"}
+  ]
+}
