@@ -489,7 +489,9 @@ export const useAppStore = create<StoreState & StoreActions>()(
             firstChapter: result.firstChapter || '',
           }
 
-          const allChars = [safeResult.protagonist, ...safeResult.supporting]
+          // 确保所有角色有正确的 roleType
+          const fixRoleType = (c: any, defaultRole: string) => ({ ...c, roleType: (['protagonist', 'supporting', 'antagonist', 'minor'].includes(c.roleType) ? c.roleType : defaultRole) })
+          const allChars = [fixRoleType(safeResult.protagonist, 'protagonist'), ...safeResult.supporting.map((c: any) => fixRoleType(c, 'supporting'))]
           const charIds = allChars.map((c) => c.id)
 
           const newChapters = safeResult.chapters.map((ch: any, index: number) => ({
@@ -551,14 +553,16 @@ export const useAppStore = create<StoreState & StoreActions>()(
             plotLines: [safeResult.plotLine.id],
             createdAt: Date.now(),
             updatedAt: Date.now(),
+            emotionEvents,
+            outlineNodes,
           }
 
           return {
             currentNovel: novel,
-            characters: [...state.characters, ...allChars],
-            worldSettings: [...state.worldSettings, safeResult.worldSetting],
-            plotLines: [...state.plotLines, safeResult.plotLine],
-            chapters: [...state.chapters, ...newChapters],
+            characters: allChars,
+            worldSettings: [safeResult.worldSetting],
+            plotLines: [safeResult.plotLine],
+            chapters: newChapters,
             emotionEvents,
             outlineNodes,
           }

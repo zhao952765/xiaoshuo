@@ -437,6 +437,10 @@ export default function DeducePage() {
     if (!confirm('重新推导会清空当前所有数据（角色、章节、世界观等），确定吗？')) return
     resetAll()
     setTheme('')
+    setSelectedModelId(currentModel?.id ?? '')
+    setLength('30000')
+    setMaleCount(1)
+    setFemaleCount(2)
     setProgress(0)
     setProgressLabel('')
     setStreamText('')

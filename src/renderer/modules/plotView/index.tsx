@@ -44,15 +44,18 @@ export default function PlotView() {
     characterIds: string[]
   }>>(storeEmotionEvents || [])
 
+  // 只在 novel 对象变化时（推导完成/切换项目）同步一次数据
+  const novelId = novel?.id
   useEffect(() => {
     setEditTitle(novel?.title || '')
     setEditSummary(novel?.summary || '')
     setOutlineNodes(storeOutlineNodes || [])
     setEmotionEvents(storeEmotionEvents || [])
-  }, [novel, storeEmotionEvents, storeOutlineNodes])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [novelId])
 
   const saveSummary = () => {
-    updateNovel({ title: editTitle, summary: editSummary } as any)
+    updateNovel({ title: editTitle, summary: editSummary, outlineNodes, emotionEvents } as any)
   }
 
   // ========== 剧情大纲操作 ==========
@@ -120,11 +123,12 @@ export default function PlotView() {
     [setRfEdges]
   )
 
-  // 当角色变化时同步图谱
+  // 只在首次加载时设置图谱节点，保留用户拖拽位置
   useEffect(() => {
     setRfNodes(initialNodes)
     setRfEdges(initialEdges)
-  }, [characters.length])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   if (!novel) {
     return (
