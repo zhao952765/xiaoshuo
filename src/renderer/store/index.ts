@@ -15,6 +15,7 @@ import type {
   PolishResult,
   Conversation,
 } from '../../config/types'
+import { transformDeduceToAppData } from '../../renderer/utils/deduceTransformer'
 
 interface StoreState {
   // ========== 核心数据 ==========
@@ -32,7 +33,7 @@ interface StoreState {
   conversations: Conversation[]
 
   // ========== 推导结果衍生数据 ==========
-  emotionEvents: Array<{ id: string; title: string; description: string; type: 'emotion' | 'adult'; characterIds: string[]; order: number }>
+  emotionEvents: Array<{ id: string; title: string; description: string; type: 'emotion' | 'adult' | 'conflict' | 'climax'; characterIds: string[]; order: number }>
   outlineNodes: Array<{ id: string; title: string; content: string; order: number }>
 
   // ========== 推导任务状态（跨页面持久） ==========
@@ -154,7 +155,7 @@ interface StoreActions {
   resetAll: () => void
 
   // ========== 推导结果更新 ==========
-  updateEmotionEvents: (events: Array<{ id: string; title: string; description: string; type: 'emotion' | 'adult'; characterIds: string[]; order: number }>) => void
+  updateEmotionEvents: (events: Array<{ id: string; title: string; description: string; type: 'emotion' | 'adult' | 'conflict' | 'climax'; characterIds: string[]; order: number }>) => void
   updateOutlineNodes: (nodes: Array<{ id: string; title: string; content: string; order: number }>) => void
 }
 
@@ -521,125 +522,37 @@ export const useAppStore = create<StoreState & StoreActions>()(
       })),
       clearDeduceTask: () => set({ deduceTask: null }),
 
-      // ----- 一键推导结果导入 -----
+      // ----- 一键推导结果导入（使用统一转换层） -----
       importFromDeduce: (result, firstChapterContent?: string) =>
         set((state) => {
-          // 安全降级
-          const safeResult = {
-            title: result.title || '未命名项目',
-            summary: result.summary || '',
-            protagonist: result.protagonist || { id: genId(), name: '主角', roleType: 'protagonist' as const, avatar: '', basicInfo: { age: '', gender: '', occupation: '' }, appearance: '', personality: [], background: '', abilities: '', relationships: [], voice: '', innerWorld: '', arc: '', tags: [], createdAt: Date.now(), updatedAt: Date.now() },
-            supporting: result.supporting || [],
-            worldSetting: result.worldSetting || { id: genId(), name: '默认世界观', worldType: 'custom' as const, description: '', overview: '', rules: [], locations: [], timeline: [], society: '', culture: '', economy: '', createdAt: Date.now(), updatedAt: Date.now() },
-            plotLine: result.plotLine || { id: genId(), type: 'main' as const, name: '主线', description: '', events: [], relatedCharacters: [], createdAt: Date.now(), updatedAt: Date.now() },
-            chapters: result.chapters?.length > 0 ? result.chapters : [
-              { title: '第一章 开端', summary: '故事开始...' },
-              { title: '第二章 发展', summary: '冲突升级...' },
-              { title: '第三章 转折', summary: '意外发现...' },
-              { title: '第四章 高潮', summary: '最终对决...' },
-              { title: '第五章 结局', summary: '尘埃落定...' },
-            ],
-            firstChapter: result.firstChapter || '',
-          }
+          const appData = transformDeduceToAppData(result, { firstChapterContent, adultMode: state.adultMode })
 
-          // 确保所有角色有正确的 roleType（问题2：多角色区分主角/配角/反派）
-          const fixRoleType = (c: any, defaultRole: string) => {
-            const roleType = (['protagonist', 'supporting', 'antagonist', 'minor'].includes(c.roleType) ? c.roleType : defaultRole)
-            return { ...c, roleType }
-          }
-          const allChars = [
-            fixRoleType(safeResult.protagonist, 'protagonist'),
-            ...safeResult.supporting.map((c: any, index: number) => {
-              // 如果 AI 已返回 roleType 则保留，否则根据索引分配
-              const roleType = c.roleType || (index === 0 ? 'supporting' : index === 1 ? 'antagonist' : 'minor')
-              return fixRoleType({ ...c, roleType }, roleType)
-            })
-          ]
-          const charIds = allChars.map((c) => c.id)
-
-          const newChapters = safeResult.chapters.map((ch: any, index: number) => ({
-            id: genId(),
-            title: ch.title,
-            summary: ch.summary,
-            content: index === 0 && firstChapterContent ? firstChapterContent : '',
-            order: index,
-            status: 'draft' as const,
-            volumeId: null,
-            wordCount: 0,
-            mood: '',
-            characters: charIds,
-            hooks: '',
-            tags: [],
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          }))
-
-          // 生成感情线事件
-          const plotEvents = safeResult.plotLine.events || []
-          const emotionEvents = [
-            ...plotEvents.slice(0, 3).map((e: any, idx: number) => ({
-              id: genId(),
-              title: e.title || `感情事件 ${idx + 1}`,
-              description: e.description || '',
-              type: (safeResult.plotLine.type === 'erotic' ? 'adult' : 'emotion') as 'emotion' | 'adult',
-              characterIds: charIds.slice(0, 2),
-              order: idx,
-            })),
-            ...Array.from({ length: Math.max(0, 3 - plotEvents.length) }, (_, i) => ({
-              id: genId(),
-              title: `感情发展 ${plotEvents.length + i + 1}`,
-              description: '待补充感情线描述...',
-              type: 'emotion' as const,
-              characterIds: charIds.slice(0, 2),
-              order: plotEvents.length + i,
-            })),
-          ]
-
-          // 生成剧情大纲节点（优先从 plotLine events 生成，否则从 chapters 兜底）
-          const events = plotEvents.length > 0
-            ? plotEvents
-            : newChapters.map((ch: any, idx: number) => ({
-                id: genId(),
-                title: ch.title || `第 ${idx + 1} 章`,
-                description: ch.summary || '',
-                order: idx,
-              }));
-          const outlineNodes = events.slice(0, 15).map((e: any, idx: number) => ({
-            id: e.id || genId(),
-            title: e.title || `剧情节点 ${idx + 1}`,
-            content: e.description || e.summary || '',
-            order: idx,
-          }));
-
-          // 创建新的小说对象，只存储 ID 引用
           const novel: Novel = {
             id: genId(),
-            title: safeResult.title,
-            summary: safeResult.summary,
+            title: result.title || '未命名项目',
+            summary: result.summary || '',
             adultMode: state.adultMode,
             tags: [],
             targetWords: '30000',
-            characters: charIds,
-            worldSettings: [safeResult.worldSetting.id],
-            chapters: newChapters.map((c) => c.id),
-            plotLines: [safeResult.plotLine.id],
+            characters: appData.charIds,
+            worldSettings: [appData.worldSetting.id],
+            chapters: appData.chapters.map((c: any) => c.id),
+            plotLines: [appData.plotLine.id],
             createdAt: Date.now(),
             updatedAt: Date.now(),
-            emotionEvents,
-            outlineNodes,
+            emotionEvents: appData.emotionEvents,
+            outlineNodes: appData.outlineNodes,
           }
 
-          // 问题1：只替换推导相关数据，保留用户其他数据（标签、记忆、AI模型、对话、日志等）
           return {
             currentNovel: novel,
-            characters: allChars,
-            worldSettings: [safeResult.worldSetting],
-            plotLines: [safeResult.plotLine],
-            chapters: newChapters,
+            characters: appData.characters,
+            worldSettings: [appData.worldSetting],
+            plotLines: [appData.plotLine],
+            chapters: appData.chapters,
             volumes: [],
-            emotionEvents,
-            outlineNodes,
-            // 保留用户原有数据（不覆盖）
+            emotionEvents: appData.emotionEvents,
+            outlineNodes: appData.outlineNodes,
             tags: state.tags,
             memories: state.memories,
             aiModels: state.aiModels,
@@ -649,13 +562,13 @@ export const useAppStore = create<StoreState & StoreActions>()(
               {
                 id: genId(),
                 type: 'success' as const,
-                message: `一键推导完成：${safeResult.title}`,
-                detail: `生成 ${allChars.length} 个角色，${newChapters.length} 个章节`,
+                message: `一键推导完成：${novel.title}`,
+                detail: `生成 ${appData.characters.length} 个角色，${appData.chapters.length} 个章节`,
                 timestamp: Date.now(),
               },
               ...state.logs,
             ].slice(0, 500),
-          }
+          } as any
         }),
 
       // ----- 长篇规划结果导入 -----

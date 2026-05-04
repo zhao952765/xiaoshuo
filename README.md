@@ -220,6 +220,52 @@ private-novel-studio-pro/
 - 世界观: `规则` / `地点` / `时间线` 区块自动提取
 - 感情线: 从 `感情线` 区块提取编号事件，无则从章节生成
 
+#### 统一转换层 (`src/renderer/utils/deduceTransformer.ts`)
+
+`parseDeduceResult()` 解析出原始 JSON 后，`transformDeduceToAppData()` 将其转换为前端所有 6 个可视化模块的完整数据。
+
+| 函数 | 说明 | 输出给 |
+|------|------|--------|
+| `transformDeduceToAppData(input)` | **统一入口**，一次调用生成全部模块所需数据 | 全部模块 |
+| `buildRelationships(chars)` | 自动生成角色双向关系：主角↔配角(相识)、主角↔反派(对立)、配角之间(同伴/相识) | 关系图谱 ReactFlow edges |
+| `buildEmotionEvents(events, chapters, charIds, adultMode?)` | 从 plotLine.events 或 chapters 生成感情线事件，type 自动轮换 `emotion→conflict→climax→adult` | 感情线时间轴 |
+| `buildOutline(events, chapters)` | 从 events 或 chapters 生成大纲节点，最后兜底 4 幕默认结构 | 剧情大纲编辑区 |
+
+**数据流**:
+```
+AI 原始文本
+  → parseDeduceResult()         [提取原始 JSON]
+    → transformDeduceToAppData() [统一转换]
+      ├── buildRelationships()   → characters[].relationships 填充 → ReactFlow edges
+      ├── buildEmotionEvents()   → emotionEvents[] 生成         → 感情线时间轴
+      ├── buildOutline()         → outlineNodes[] 生成           → 大纲编辑区
+      └── chapters/worldSetting  → 直接映射                     → 章节目录/世界观
+```
+
+**关系生成示例**（3 个角色：主角 + 女配角 + 男反派）：
+```
+主角.relationships = [
+  { targetId: 女配角.id, type: '相识' },
+  { targetId: 男反派.id, type: '对立' }
+]
+女配角.relationships = [
+  { targetId: 主角.id,  type: '相识' },
+  { targetId: 男反派.id, type: '相识' }
+]
+男反派.relationships = [
+  { targetId: 主角.id,  type: '对立' },
+  { targetId: 女配角.id, type: '相识' }
+]
+```
+
+**感情线生成规则**（每轮循环取下一个 type）：
+```
+第1个事件 → 'emotion'  第2个 → 'conflict'  第3个 → 'climax'
+第4个 → 'emotion'  第5个 → 'adult'(成人模式)  第6个 → 'climax'
+...
+至少保证 3 个事件，最多取 8 个。
+```
+
 ---
 
 ### 2. 长篇规划 (`/longplan`)
@@ -307,6 +353,60 @@ private-novel-studio-pro/
 | 剧情大纲 | 可编辑的大纲节点，支持排序 |
 | 章节目录 | 章节列表 + 字数 + 状态 |
 | 关系图谱 | React Flow 交互图，roleType 着色（主角/反派/配角） |
+
+#### 剧情观数据格式
+
+```typescript
+// ====== 感情线事件 ======
+interface EmotionEvent {
+  id: string;
+  title: string;        // 事件标题，如"初次相遇"
+  description: string;  // 事件详细描述
+  type: 'emotion' | 'adult';  // 感情线 / 肉欲线
+  characterIds: string[];     // 关联角色 ID 列表
+  order: number;              // 排序序号
+}
+
+// ====== 剧情大纲节点 ======
+interface OutlineNode {
+  id: string;
+  title: string;        // 节点标题，如"第一幕 开端"
+  content: string;      // 内容概要
+  order: number;        // 排序序号
+}
+```
+
+**存储位置**：根状态 (`emotionEvents`, `outlineNodes`)，不嵌套在 `novel` 对象中，避免同步问题。<br>
+**持久化**：通过 Zustand `partialize` 自动保存到 `localStorage`。
+
+**关系图谱数据源**：
+
+```typescript
+// 节点：直接来源于 store.characters（每个角色为一个节点）
+interface GraphNode {
+  id: string;          // character.id
+  data: { label: string };  // character.name
+  position: { x: number; y: number };
+  style: {
+    background: string;  // 按 roleType 着色
+    border: string;      // 主角紫 / 反派红 / 配角粉
+  };
+}
+
+// 边：来源于 character.relationships
+interface GraphEdge {
+  id: string;          // `e-{char.id}-{rel.targetId}`
+  source: string;      // char.id
+  target: string;      // rel.targetId
+  label: string;       // rel.type（如"恋人"、"仇敌"）
+  animated: boolean;
+  style: { stroke: string; strokeWidth: number };
+}
+```
+
+**感情线时间轴渲染**：左侧垂直线性渐变（粉→紫→红），每个事件前有对应颜色的圆点标记，点击可编辑类型/标题/描述/关联角色。
+
+**大纲编辑器**：节点可添加/删除/上下排序，每个节点包含 `input`（标题）+ `textarea`（内容）。
 
 ---
 

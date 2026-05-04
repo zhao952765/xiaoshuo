@@ -72,7 +72,7 @@ export interface Novel {
     id: string;
     title: string;
     description: string;
-    type: 'emotion' | 'adult';
+    type: 'emotion' | 'adult' | 'conflict' | 'climax';
     characterIds: string[];
     order: number;
   }>;

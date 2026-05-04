@@ -42,7 +42,7 @@ export default function PlotView() {
     id: string
     title: string
     description: string
-    type: 'emotion' | 'adult'
+    type: 'emotion' | 'adult' | 'conflict' | 'climax'
     characterIds: string[]
     order: number
   }>>(storeEmotionEvents || [])
@@ -395,7 +395,7 @@ export default function PlotView() {
               ) : null}
             </div>
 
-            {emotionEvents.filter((e) => adultMode || e.type === 'emotion').length === 0 ? (
+            {emotionEvents.filter((e) => adultMode || e.type === 'emotion' || e.type === 'conflict' || e.type === 'climax').length === 0 ? (
               <div style={{ textAlign: 'center', padding: '60px 0' }}>
                 <p style={{ color: '#666', marginBottom: '16px' }}>暂无感情线事件</p>
                 <button
@@ -423,7 +423,7 @@ export default function PlotView() {
                 </button>
               </div>
             ) : (
-                emotionEvents.filter((e) => adultMode || e.type === 'emotion').map((evt, idx) => (
+                emotionEvents.filter((e) => adultMode || e.type === 'emotion' || e.type === 'conflict' || e.type === 'climax').map((evt, idx) => (
                   <div key={evt.id} style={{ position: 'relative', marginBottom: '16px' }}>
                     {/* 节点圆点 */}
                     <div style={{
@@ -449,23 +449,25 @@ export default function PlotView() {
                         <select
                           value={evt.type}
                           onChange={(e) => {
-                            const val = e.target.value as 'emotion' | 'adult'
+                            const val = e.target.value as 'emotion' | 'adult' | 'conflict' | 'climax'
                             setEmotionEvents(prev => prev.map(e => e.id === evt.id ? { ...e, type: val } : e))
                           }}
                           style={{
                             padding: '6px 10px',
-                            background: evt.type === 'adult' ? 'rgba(239,68,68,0.15)' : 'rgba(236,72,153,0.15)',
-                            border: `1px solid ${evt.type === 'adult' ? 'rgba(239,68,68,0.3)' : 'rgba(236,72,153,0.3)'}`,
+                            background: evt.type === 'adult' ? 'rgba(239,68,68,0.15)' : evt.type === 'conflict' ? 'rgba(245,158,11,0.15)' : evt.type === 'climax' ? 'rgba(168,85,247,0.15)' : 'rgba(236,72,153,0.15)',
+                            border: `1px solid ${evt.type === 'adult' ? 'rgba(239,68,68,0.3)' : evt.type === 'conflict' ? 'rgba(245,158,11,0.3)' : evt.type === 'climax' ? 'rgba(168,85,247,0.3)' : 'rgba(236,72,153,0.3)'}`,
                             borderRadius: '6px',
-                            color: evt.type === 'adult' ? '#f87171' : '#f472b6',
+                            color: evt.type === 'adult' ? '#f87171' : evt.type === 'conflict' ? '#facc15' : evt.type === 'climax' ? '#c084fc' : '#f472b6',
                             fontSize: '12px',
                             fontWeight: 600,
                             cursor: 'pointer',
                             outline: 'none',
                           }}
                         >
-                          <option value="emotion" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>感情线</option>
-                          <option value="adult" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>肉欲线</option>
+                          <option value="emotion" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>💕 感情线</option>
+                          <option value="conflict" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>⚔️ 冲突</option>
+                          <option value="climax" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>🔥 高潮</option>
+                          <option value="adult" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>🔞 肉欲线</option>
                         </select>
 
                         <input

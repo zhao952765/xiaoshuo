@@ -31,158 +31,346 @@ async function callAIModelStream(model: AIModel, systemPrompt: string, userPromp
   return fullText
 }
 
-function extractBlock(text: string, keywords: string[]): string {
-  const escaped = keywords.map(k =>
-    k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  );
-  const pattern = `(?:^|\\n)(?:#{1,4}\\s*|\\*{0,2}${escaped.join('|')}\\s*[：:]?\\s*\\n*)([\\s\\S]*?)(?=\\n(?:#{1,4}\\s|\\*{2}|第\\s*[0-9一二三四五六七八九十百千]+[章节卷]|【|配角|世界观|设定|规则|\\n$)|$)`;
-  const regex = new RegExp(pattern, 'im');
-  return text.match(regex)?.[1]?.trim() || '';
+// ===== 旧版解析逻辑（从 F:\\1\\old 移植，保持原有行为不变） =====
+
+interface GenerationResult {
+  title: string;
+  synopsis: string;
+  protagonist: string;
+  supportingChars: string;
+  maleSupportingChars: string;
+  femaleSupportingChars: string;
+  worldview: string;
+  emotionalLine: string;
+  chapterOutline: string;
+  chapterList: string;
+  firstChapter: string;
 }
 
-function parseDeduceResult(aiText: string) {
-  const result = {
-    title: '',
-    summary: '',
-    firstChapter: '',
-    chapters: [] as { title: string; summary: string }[],
-    supporting: [] as any[],
-    protagonist: null as any,
-    worldSetting: { id: '', name: '', worldType: 'custom' as const, description: '', overview: '', rules: [] as any[], locations: [] as any[], timeline: [] as any[], society: '', culture: '', economy: '', createdAt: 0, updatedAt: 0 },
-    plotLine: { id: '', type: 'main' as const, name: '主线', description: '', events: [] as any[], relatedCharacters: [] as string[], createdAt: 0, updatedAt: 0 },
+// 解析生成结果 —— 两遍扫描法（来自旧版 CreationCenter）
+function parseGenerationResult(text: string): GenerationResult {
+  const result: GenerationResult = {
+    title: '', synopsis: '', protagonist: '',
+    supportingChars: '', maleSupportingChars: '', femaleSupportingChars: '',
+    worldview: '', emotionalLine: '',
+    chapterOutline: '', chapterList: '', firstChapter: '',
   };
 
-  // 1. 标题（多模式匹配）
-  const titleMatch = aiText.match(/(?:^|\n)#{1,4}\s*(.+?)(?:\n|$)/);
-  const bracketTitle = aiText.match(/【(.+?)】/);
-  result.title = titleMatch?.[1] || bracketTitle?.[1] || '未命名故事';
+  // ── 步骤1：定位字段标题行 ──
+  type FieldRule = { key: keyof GenerationResult; keywords: string[] };
+  const RULES: FieldRule[] = [
+    { key: 'title',                keywords: ['小说标题', '小说题目'] },
+    { key: 'synopsis',             keywords: ['小说简介', '故事简介', '内容简介'] },
+    { key: 'protagonist',          keywords: ['主角设定', '主角介绍'] },
+    { key: 'maleSupportingChars',  keywords: ['男配角', '男角色', '男性配角'] },
+    { key: 'femaleSupportingChars',keywords: ['女配角', '女角色', '女性配角'] },
+    { key: 'supportingChars',      keywords: ['主要配角设定', '配角设定', '其他配角', '配角介绍'] },
+    { key: 'worldview',            keywords: ['世界观与氛围', '世界观', '世界背景'] },
+    { key: 'emotionalLine',        keywords: ['感情/肉欲发展线', '情感发展线', '主要冲突线与感情', '冲突线与感情', '冲突线与情感'] },
+    { key: 'chapterOutline',       keywords: ['剧情大纲', '整体规划'] },
+    { key: 'chapterList',          keywords: ['章节目录'] },
+    { key: 'firstChapter',         keywords: ['第一章正文', '正文内容'] },
+  ];
 
-  // 2. 摘要
-  const summaryMatch = aiText.match(/摘要[：:]\s*(.+)/);
-  result.summary = summaryMatch?.[1] || '';
+  // 判断一行是否是"字段标题行"（而非正文中提到关键字）
+  const isTitleLine = (line: string): boolean => {
+    const trimmed = line.trim();
+    return (
+      /^【/.test(trimmed) ||
+      /^#{1,4}\s/.test(trimmed) ||
+      /^\*\*/.test(trimmed) ||
+      /^\d+[.、．\s]/.test(trimmed) ||
+      /^第[一二三四五六七八九十\d]+[章节卷]/.test(trimmed) ||
+      /^[一二三四五六七八九十]+[、.．]/.test(trimmed) ||
+      trimmed.length < 25
+    );
+  };
 
-  // 3. 章节分割与解析
-  const chapterPattern = /(?:^|\n)(?:#{1,4}\s*)?(第\s*[0-9一二三四五六七八九十百千]+[章节卷]\s*[^\n]*)/g;
-  let match;
-  const chapterStarts: { index: number; title: string }[] = [];
-  while ((match = chapterPattern.exec(aiText)) !== null) {
-    chapterStarts.push({ index: match.index, title: match[1].replace(/^#+\s*/, '') });
-  }
-  for (let i = 0; i < chapterStarts.length; i++) {
-    const start = aiText.indexOf(chapterStarts[i].title, chapterStarts[i].index);
-    const end = i + 1 < chapterStarts.length ? chapterStarts[i + 1].index : aiText.length;
-    const content = aiText.slice(start + chapterStarts[i].title.length, end).trim().replace(/^[\r\n]+/, '');
-    result.chapters.push({
-      title: chapterStarts[i].title,
-      summary: content.slice(0, 100),
-    });
-  }
-  if (result.chapters.length === 0) {
-    result.chapters.push({ title: '第一章', summary: '开篇' });
-  }
-  
-  // 提取第一章内容
-  const firstChapterBlock = extractBlock(aiText, ['第一章', '第1章', '开篇', '开头']);
-  result.firstChapter = firstChapterBlock || aiText.slice(0, 2000); // 如果没有明确的章节块，取前2000字符作为第一章
+  const lines = text.split('\n');
+  const foundHeaders: { key: keyof GenerationResult; lineIdx: number }[] = [];
 
-  // 4. 配角解析
-  const supBlock = extractBlock(aiText, ['配角设定', '配角', '角色列表']);
-  if (supBlock) {
-    const lines = supBlock.split('\n');
-    for (const line of lines) {
-      const l = line.trim();
-      if (!l) continue;
-      const m = l.match(/^(?:-\s*)?(?:\*{0,2}(.+?)\*{0,2})\s*[：:]\s*(.+)/);
-      if (m) {
-        result.supporting.push({ id: `sup_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, name: m[1].trim(), roleType: 'supporting', basicInfo: { age: '', gender: '', occupation: '' }, appearance: '', personality: [], background: m[2].trim(), abilities: '', relationships: [], voice: '', innerWorld: '', arc: '', tags: [], avatar: '', createdAt: Date.now(), updatedAt: Date.now() });
-      } else if (l.startsWith('-') || l.startsWith('*')) {
-        const name = l.replace(/^[-*]\s*/, '').split(/[：:]/)[0];
-        if (name) result.supporting.push({ id: `sup_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, name, roleType: 'supporting', basicInfo: { age: '', gender: '', occupation: '' }, appearance: '', personality: [], background: '', abilities: '', relationships: [], voice: '', innerWorld: '', arc: '', tags: [], avatar: '', createdAt: Date.now(), updatedAt: Date.now() });
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmedLine = line.trim();
+    if (!trimmedLine) continue;
+    if (!isTitleLine(trimmedLine)) continue;
+
+    for (const rule of RULES) {
+      const matched = rule.keywords.some(kw => trimmedLine.includes(kw));
+      if (!matched) continue;
+      if (foundHeaders.some(h => h.key === rule.key && h.lineIdx === i)) continue;
+      foundHeaders.push({ key: rule.key, lineIdx: i });
+      break;
+    }
+  }
+
+  // 后备扫描：firstChapter
+  if (!foundHeaders.some(h => h.key === 'firstChapter')) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line || foundHeaders.some(h => h.lineIdx === i)) continue;
+      if (/^#{1,3}\s*第一章/.test(line) || /^\*\*第一章/.test(line) ||
+          /^【第一章/.test(line) || /^第一章正文/.test(line)) {
+        foundHeaders.push({ key: 'firstChapter', lineIdx: i });
+        break;
       }
     }
   }
 
-  // 5. 世界观解析
-  const worldNameMatch = aiText.match(/世界观[：:]\s*(.+)/);
-  const wName = worldNameMatch?.[1] || '';
-  const descMatch = aiText.match(/世界观描述[：:](.+)/);
-  const wDesc = descMatch?.[1] || '';
-  const rulesBlock = extractBlock(aiText, ['世界规则', '规则', '世界观规则']);
-  const locBlock = extractBlock(aiText, ['地点', '场景', '主要地点']);
-  const timeBlock = extractBlock(aiText, ['时间线', '年代', '历史']);
-  result.worldSetting = {
-    id: `world_${Date.now()}`,
-    name: wName || '世界观设定',
-    worldType: 'custom' as const,
-    description: wDesc || aiText.slice(0, 200),
-    overview: aiText.slice(0, 600),
-    rules: rulesBlock ? rulesBlock.split('\n').map(l => ({ name: l.replace(/^[-\d.]+\s*/, '').trim(), description: '', scope: '', limit: '' })).filter(r => r.name) : [],
-    locations: locBlock ? locBlock.split('\n').map(l => ({ name: l.replace(/^-\s*/, '').trim(), type: '', description: '', atmosphere: '', scenes: [] })).filter(l => l.name) : [],
-    timeline: timeBlock ? timeBlock.split('\n').map(l => ({ era: '', title: l.replace(/^-\s*/, '').trim(), description: '', impact: '' })).filter(t => t.title) : [],
-    society: '', culture: '', economy: '',
-    createdAt: Date.now(), updatedAt: Date.now(),
-  };
-
-  // 6. 主角（从第一章或标题区域提取占位）
-  result.protagonist = {
-    id: `prot_${Date.now()}`,
-    name: result.title.slice(0, 10) || '主角',
-    roleType: 'protagonist' as const,
-    avatar: '', basicInfo: { age: '', gender: '', occupation: '' },
-    appearance: '', personality: [], background: result.summary.slice(0, 200), abilities: '',
-    relationships: [], voice: '', innerWorld: '', arc: '', tags: [],
-    createdAt: Date.now(), updatedAt: Date.now(),
-  };
-
-  // 7. 剧情线 events（从AI响应中提取感情线和剧情事件）
-  const emotionBlock = extractBlock(aiText, ['感情线', '感情发展', '感情事件', '情感线']);
-  const plotEvents: any[] = [];
-  
-  // 从感情线块解析事件
-  if (emotionBlock) {
-    const lines = emotionBlock.split('\n');
-    let order = 0;
-    for (const line of lines) {
-      const l = line.trim();
-      if (!l || !l.match(/^\d+[\.\)、]/)) continue;
-      const content = l.replace(/^\d+[\.\)、]\s*/, '');
-      const titleMatch = content.match(/^(.+?)[：:]/);
-      if (titleMatch) {
-        plotEvents.push({
-          id: `evt_${Date.now()}_${order}`,
-          title: titleMatch[1].trim(),
-          description: content.replace(titleMatch[0], '').trim(),
-          order: order++,
-          chapterId: null,
-        });
+  // 后备：emotionalLine
+  if (!foundHeaders.some(h => h.key === 'emotionalLine')) {
+    const EMOTION_EXTRA_KW = ['情感发展', '感情线', '肉欲发展', '情欲发展', '冲突线', '主要冲突', '冲突设计'];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line || !isTitleLine(line)) continue;
+      if (foundHeaders.some(h => h.lineIdx === i)) continue;
+      if (EMOTION_EXTRA_KW.some(kw => line.includes(kw))) {
+        foundHeaders.push({ key: 'emotionalLine', lineIdx: i });
+        break;
       }
     }
   }
-  
-  // 如果没有找到感情线，从章节生成基本事件
-  if (plotEvents.length === 0) {
-    result.chapters.forEach((ch, idx) => {
-      plotEvents.push({
-        id: `evt_${Date.now()}_${idx}`,
-        title: ch.title,
-        description: ch.summary,
-        order: idx,
-        chapterId: null,
+
+  // 后备：chapterOutline
+  if (!foundHeaders.some(h => h.key === 'chapterOutline')) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line || !isTitleLine(line)) continue;
+      if (foundHeaders.some(h => h.lineIdx === i)) continue;
+      if (line.includes('大纲')) {
+        foundHeaders.push({ key: 'chapterOutline', lineIdx: i });
+        break;
+      }
+    }
+  }
+
+  foundHeaders.sort((a, b) => a.lineIdx - b.lineIdx);
+
+  // ── 步骤2：按区间提取内容 ──
+  for (let h = 0; h < foundHeaders.length; h++) {
+    const { key, lineIdx } = foundHeaders[h];
+    let endIdx = lines.length;
+    for (let k = h + 1; k < foundHeaders.length; k++) {
+      if (foundHeaders[k].lineIdx > lineIdx) {
+        endIdx = foundHeaders[k].lineIdx;
+        break;
+      }
+    }
+
+    const headerLine = lines[lineIdx];
+    const inlineSuffix = headerLine
+      .replace(/^[\d\s#.*（）()、\-—]+/, '')
+      .replace(/^【[^】]*】/, '')
+      .replace(/^\*\*[^*]+\*\*\s*[：:]*/, '')
+      .replace(/^[^：:]*[：:]/, '')
+      .trim();
+
+    const afterLines = lines.slice(lineIdx + 1, endIdx);
+    while (afterLines.length > 0 && !afterLines[afterLines.length - 1].trim()) afterLines.pop();
+    const afterContent = afterLines.join('\n').trim();
+
+    const parts: string[] = [];
+    if (inlineSuffix && inlineSuffix !== headerLine.trim()) parts.push(inlineSuffix);
+    if (afterContent) parts.push(afterContent);
+    const combined = parts.join('\n').trim();
+
+    if (result[key] && combined) {
+      result[key] += '\n\n' + combined;
+    } else if (combined) {
+      result[key] = combined;
+    }
+  }
+
+  // ── 步骤3：配角设定智能分配 ──
+  if (result.supportingChars && !result.maleSupportingChars && !result.femaleSupportingChars) {
+    const content = result.supportingChars;
+    const maleIdx = content.search(/男配角|男角色|男性/);
+    const femaleIdx = content.search(/女配角|女角色|女性/);
+    if (maleIdx >= 0 && femaleIdx >= 0 && maleIdx < femaleIdx) {
+      result.maleSupportingChars = content.slice(0, femaleIdx).trim();
+      result.femaleSupportingChars = content.slice(femaleIdx).trim();
+    } else if (femaleIdx >= 0 && maleIdx < 0) {
+      result.femaleSupportingChars = content;
+    } else {
+      result.maleSupportingChars = content;
+    }
+  }
+
+  // ── 步骤4：后备处理 ──
+  if (!result.chapterList) {
+    const chLines = lines
+      .map((l, i) => ({ line: l.trim(), idx: i }))
+      .filter(({ line, idx }) => {
+        if (foundHeaders.some(h => h.lineIdx === idx)) return false;
+        return /第[一二三四五六七八九十百\d]+章|^\s*\d+[.、．]/.test(line);
       });
-    });
+    if (chLines.length > 0) {
+      result.chapterList = chLines.map(c => c.line).join('\n');
+    }
   }
 
-  result.plotLine = {
-    id: `plot_${Date.now()}`,
-    type: 'main' as const,
-    name: '主线',
-    description: result.summary.slice(0, 200),
-    events: plotEvents,
-    relatedCharacters: [],
-    createdAt: Date.now(), updatedAt: Date.now(),
-  };
+  if (!Object.values(result).some(v => v.length > 0)) {
+    result.firstChapter = text;
+  }
+
+  if (!result.title) result.title = '';
+  result.title = result.title
+    .replace(/[*#【】「」《》"']/g, '')
+    .replace(/^小说标题[：:]\s*/, '')
+    .replace(/^小说题目[：:]\s*/, '')
+    .trim();
 
   return result;
+}
+
+/**
+ * 将旧版 GenerationResult 映射为当前系统所需的 DeduceInput 格式
+ * （保持旧版解析逻辑不变，仅做字段名/结构转换）
+ */
+function mapOldResultToCurrent(old: GenerationResult) {
+  const now = Date.now();
+
+  // 解析章节列表
+  const chapterLines = (old.chapterList || '')
+    .split('\n')
+    .map(l => l.replace(/^[\d\s\.\-、]+/, '').trim())
+    .filter(Boolean);
+  const chapters = chapterLines.length > 0
+    ? chapterLines.map(title => ({ title, summary: '' }))
+    : [{ title: '第一章', summary: '开篇' }];
+
+  // 解析配角
+  const allSupportingText = [old.maleSupportingChars, old.femaleSupportingChars, old.supportingChars]
+    .filter(Boolean).join('、');
+  const supportingNames = allSupportingText
+    .split(/[,，、;\s]+/).filter(Boolean);
+  const supporting = supportingNames.map(name => ({
+    id: `sup_${now}_${Math.random().toString(36).slice(2, 6)}`,
+    name: name.trim(), roleType: 'supporting' as const,
+    basicInfo: { age: '', gender: '', occupation: '' },
+    appearance: '', personality: [], background: '', abilities: '',
+    relationships: [], voice: '', innerWorld: '', arc: '', tags: [], avatar: '',
+    createdAt: now, updatedAt: now,
+  }));
+
+  // 主角
+  const protagonist = {
+    id: `prot_${now}`,
+    name: old.protagonist || old.title?.slice(0, 10) || '主角',
+    roleType: 'protagonist' as const,
+    avatar: '', basicInfo: { age: '', gender: '', occupation: '' },
+    appearance: '', personality: [], background: '', abilities: '',
+    relationships: [], voice: '', innerWorld: '', arc: '', tags: [],
+    createdAt: now, updatedAt: now,
+  };
+
+  // 世界观
+  const worldSetting = {
+    id: `world_${now}`, name: '世界观设定', worldType: 'custom' as const,
+    description: old.worldview?.slice(0, 200) || '', overview: old.worldview?.slice(0, 600) || '',
+    rules: [], locations: [], timeline: [],
+    society: '', culture: '', economy: '',
+    createdAt: now, updatedAt: now,
+  };
+
+  // 剧情线 events
+  const outlineLines = (old.chapterOutline || '').split('\n').filter(Boolean);
+  const plotEvents = outlineLines.length > 0
+    ? outlineLines.slice(0, 8).map((l, i) => ({
+        id: `evt_${now}_${i}`, title: l.replace(/^\d+[.、）\)]\s*/, '').trim(),
+        description: '', order: i, chapterId: null,
+      }))
+    : chapters.map((ch, i) => ({
+        id: `evt_${now}_${i}`, title: ch.title, description: ch.summary, order: i, chapterId: null,
+      }));
+
+  const plotLine = {
+    id: `plot_${now}`, type: 'main' as const, name: '主线',
+    description: old.synopsis?.slice(0, 200) || '', events: plotEvents,
+    relatedCharacters: [], createdAt: now, updatedAt: now,
+  };
+
+  return {
+    title: old.title || '未命名小说',
+    summary: old.synopsis || '',
+    firstChapter: old.firstChapter || '',
+    chapters,
+    supporting,
+    protagonist,
+    worldSetting,
+    plotLine,
+  };
+}
+
+// 统一入口：使用旧版解析逻辑，映射为当前格式
+function parseDeduceResult(aiText: string, maleCount = 1, femaleCount = 2) {
+  const oldResult = parseGenerationResult(aiText);
+  const res = mapOldResultToCurrent(oldResult);
+
+  // 根据用户设定的男女角色数调整主角与配角
+  function normGender(g: any) {
+    if (!g) return null
+    const s = String(g).toLowerCase()
+    if (s.includes('男') || s.includes('male') || s.includes('♂')) return 'male'
+    if (s.includes('女') || s.includes('female') || s.includes('♀')) return 'female'
+    return null
+  }
+
+  const desiredMale = Number(maleCount || 0)
+  const desiredFemale = Number(femaleCount || 0)
+
+  // 确定主角性别
+  let remMale = desiredMale
+  let remFemale = desiredFemale
+  const protG = normGender(res.protagonist?.basicInfo?.gender)
+  if (protG === 'male') remMale = Math.max(0, remMale - 1)
+  else if (protG === 'female') remFemale = Math.max(0, remFemale - 1)
+  else {
+    if (remMale >= remFemale && remMale > 0) { res.protagonist.basicInfo = { ...res.protagonist.basicInfo, gender: '男' }; remMale = Math.max(0, remMale - 1) }
+    else if (remFemale > 0) { res.protagonist.basicInfo = { ...res.protagonist.basicInfo, gender: '女' }; remFemale = Math.max(0, remFemale - 1) }
+  }
+
+  // 分组已有配角
+  const males: any[] = []
+  const females: any[] = []
+  let unknownChars: any[] = []
+  (res.supporting || []).forEach((s: any) => {
+    const g = normGender(s.basicInfo?.gender)
+    if (g === 'male') males.push(s)
+    else if (g === 'female') females.push(s)
+    else unknownChars.push(s)
+  })
+
+  const keepMales = males.slice(0, remMale)
+  remMale = Math.max(0, remMale - keepMales.length)
+  const keepFemales = females.slice(0, remFemale)
+  remFemale = Math.max(0, remFemale - keepFemales.length)
+
+  while ((remMale > 0 || remFemale > 0) && unknownChars.length > 0) {
+    const u = unknownChars.shift() as any
+    if (remMale > 0) { u.basicInfo = { ...u.basicInfo, gender: '男' }; keepMales.push(u); remMale-- }
+    else if (remFemale > 0) { u.basicInfo = { ...u.basicInfo, gender: '女' }; keepFemales.push(u); remFemale-- }
+  }
+
+  function makeChar(g: '男' | '女', i: number) {
+    const now2 = Date.now()
+    return {
+      id: `sup_${now2}_${Math.random().toString(36).slice(2,6)}`,
+      name: `${g}配角${now2.toString().slice(-4)}_${i}`,
+      roleType: 'supporting' as const,
+      basicInfo: { age: '', gender: g, occupation: '' },
+      appearance: '', personality: [], background: '', abilities: '',
+      relationships: [], voice: '', innerWorld: '', arc: '', tags: [], avatar: '',
+      createdAt: now2, updatedAt: now2,
+    }
+  }
+  let idx = 1
+  while (remMale > 0) { keepMales.push(makeChar('男', idx++)); remMale-- }
+  while (remFemale > 0) { keepFemales.push(makeChar('女', idx++)); remFemale-- }
+
+  res.supporting = [...keepMales, ...keepFemales]
+
+  return res
 }
 
 export default function DeducePage() {
@@ -199,11 +387,24 @@ export default function DeducePage() {
   const [femaleCount, setFemaleCount] = useState(deduceTask?.femaleCount || 2)
   const [targetLength, setTargetLength] = useState(deduceTask?.targetLength || '30000')
   const [showTagSelector, setShowTagSelector] = useState(false)
+  const [showFullResult, setShowFullResult] = useState(false)
   const [selectedTags, setSelectedTags] = useState<string[]>([])
 
   // 从 store 获取标签数据
   const allTags = store.tags || []
+  const storeSelectedIds = store.selectedTagIds || []
   const isGenerating = deduceTask?.isRunning || false
+
+  // 初始化时将智能标签页的已选标签同步到本地状态
+  useEffect(() => {
+    if (storeSelectedIds.length > 0 && selectedTags.length === 0) {
+      const initialTags = allTags.filter(t => storeSelectedIds.includes(t.id)).map(t => t.name)
+      if (initialTags.length > 0) {
+        setSelectedTags(initialTags)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const deduceResult = deduceTask?.result || null
   const deduceError = deduceTask?.error || null
   const isSubmitting = useRef(false)
@@ -277,7 +478,7 @@ export default function DeducePage() {
       for (const [k, v] of Object.entries(vars)) userPrompt = userPrompt.split(`{${k}}`).join(v)
 
       const fullResult = await callAIModelStream(model, systemPrompt, userPrompt, () => {})
-      const result = parseDeduceResult(fullResult)
+      const result = parseDeduceResult(fullResult, maleCount, femaleCount)
       store.completeDeduceTask(result)
     } catch (err: any) {
       store.failDeduceTask(err.message || '生成失败')
@@ -488,25 +689,32 @@ export default function DeducePage() {
 
       {/* === 结果面板 === */}
       {deduceResult && !isGenerating && (
-        <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '14px', padding: '24px', marginTop: '20px' }}>
+        <div style={{
+          background: '#1a1a1a',
+          border: '1px solid #2a2a2a',
+          borderRadius: '14px',
+          padding: '24px',
+          marginTop: '20px',
+          maxHeight: '90vh',
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          minHeight: 0,
+        }}>
+
+          {/* --- 顶部：标题 + 操作按钮 --- */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '18px', flexWrap: 'wrap', gap: '10px' }}>
             <div>
               <div style={{ fontSize: '18px', fontWeight: 700, color: '#fff' }}>✅ {deduceResult.title}</div>
               <div style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>推导完成，可保存到项目或放弃</div>
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={handleDiscard} style={{ padding: '7px 14px', background: '#1a1a1a', border: '1px solid #444', borderRadius: '8px', color: '#aaa', fontSize: '13px', cursor: 'pointer' }}>
-                🗑 放弃
-              </button>
-              <button onClick={handleSave} style={{ padding: '7px 14px', background: '#1a1a1a', border: '1px solid #6366f1', borderRadius: '8px', color: '#818cf8', fontSize: '13px', cursor: 'pointer', fontWeight: 600 }}>
-                💾 保存
-              </button>
-              <button onClick={handleSaveAndView} style={{ padding: '7px 16px', background: '#6366f1', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '13px', cursor: 'pointer', fontWeight: 600 }}>
-                ✓ 保存并查看
-              </button>
+              <button onClick={handleDiscard}  style={{ padding: '7px 14px', background: '#1a1a1a', border: '1px solid #444', borderRadius: '8px', color: '#aaa', fontSize: '13px', cursor: 'pointer' }}>🗑 放弃</button>
+              <button onClick={handleSave}    style={{ padding: '7px 14px', background: '#1a1a1a', border: '1px solid #6366f1', borderRadius: '8px', color: '#818cf8', fontSize: '13px', cursor: 'pointer', fontWeight: 600 }}>💾 保存</button>
+              <button onClick={handleSaveAndView} style={{ padding: '7px 16px', background: '#6366f1', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '13px', cursor: 'pointer', fontWeight: 600 }}>✓ 保存并查看</button>
             </div>
           </div>
 
+          {/* --- 4 个统计卡片 --- */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '16px' }}>
             <div style={{ padding: '14px', background: '#0f0f0f', borderRadius: '10px', textAlign: 'center' }}>
               <div style={{ fontSize: '22px', fontWeight: 'bold', color: '#818cf8' }}>{1 + (deduceResult.supporting?.length || 0)}</div>
@@ -526,12 +734,154 @@ export default function DeducePage() {
             </div>
           </div>
 
+          {/* --- 故事简介 --- */}
           {deduceResult.summary && (
-            <div style={{ padding: '14px', background: '#0f0f0f', borderRadius: '10px' }}>
+            <div style={{ padding: '14px', background: '#0f0f0f', borderRadius: '10px', marginBottom: '12px' }}>
               <div style={{ fontSize: '12px', color: '#818cf8', fontWeight: 600, marginBottom: '6px' }}>📖 故事简介</div>
-              <div style={{ fontSize: '13px', color: '#bbb', lineHeight: 1.7 }}>{deduceResult.summary}</div>
+              <div style={{ fontSize: '13px', color: '#bbb', lineHeight: 1.7, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{deduceResult.summary}</div>
             </div>
           )}
+
+          {/* --- 查看全部结果按钮 + 展开面板 --- */}
+          <div style={{ borderTop: '1px solid #2a2a2a', paddingTop: '14px', marginTop: '4px' }}>
+            <button onClick={() => setShowFullResult(!showFullResult)}
+              style={{ padding: '8px 16px', background: 'transparent', border: '1px solid #444', borderRadius: '8px', color: '#aaa', fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span>{showFullResult ? '▼' : '▶'}</span>
+              {showFullResult ? '收起全部推导结果' : '查看全部推导结果'}
+            </button>
+
+            {showFullResult && (
+              <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '14px', overflow: 'visible', height: 'auto' }}>
+
+                {/* 章节列表 */}
+                {deduceResult.chapters?.length > 0 && (
+                  <div style={{ background: '#0f0f0f', borderRadius: '10px', padding: '14px' }}>
+                    <div style={{ fontSize: '12px', color: '#4ade80', fontWeight: 600, marginBottom: '8px' }}>📄 章节列表（共 {deduceResult.chapters.length} 章）</div>
+                    {deduceResult.chapters.map((ch: any, idx: number) => (
+                      <div key={idx} style={{ padding: '8px 12px', background: '#1a1a1a', borderRadius: '6px', marginBottom: '6px' }}>
+                        <div style={{ fontSize: '13px', color: '#e0e0e0', fontWeight: 500 }}>{ch.title}</div>
+                        <div style={{ fontSize: '12px', color: '#888', marginTop: '2px', lineHeight: 1.5, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{ch.summary}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* 配角列表 */}
+                {deduceResult.supporting?.length > 0 && (
+                  <div style={{ background: '#0f0f0f', borderRadius: '10px', padding: '14px' }}>
+                    <div style={{ fontSize: '12px', color: '#818cf8', fontWeight: 600, marginBottom: '8px' }}>👥 配角列表（共 {deduceResult.supporting.length} 个）</div>
+                    {deduceResult.supporting.map((s: any, idx: number) => (
+                      <div key={idx} style={{ padding: '10px 12px', background: '#1a1a1a', borderRadius: '6px', marginBottom: '6px' }}>
+                        <div style={{ fontSize: '13px', color: '#e0e0e0', fontWeight: 500 }}>{idx + 1}. {s.name}</div>
+                        <div style={{ fontSize: '12px', color: '#888', marginTop: '3px', lineHeight: 1.5, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
+                          {s.background || '暂无描述'}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#666', marginTop: '3px' }}>
+                          {s.basicInfo?.gender && `性别：${s.basicInfo.gender}`}
+                          {s.basicInfo?.age && ` · 年龄：${s.basicInfo.age}`}
+                          {s.basicInfo?.occupation && ` · 职业：${s.basicInfo.occupation}`}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* 世界观 */}
+                {deduceResult.worldSetting && (
+                  <div style={{ background: '#0f0f0f', borderRadius: '10px', padding: '14px' }}>
+                    <div style={{ fontSize: '12px', color: '#facc15', fontWeight: 600, marginBottom: '8px' }}>🌍 世界观</div>
+                    <div style={{ fontSize: '12px', color: '#bbb', lineHeight: 1.6, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap', marginBottom: '10px' }}>
+                      {deduceResult.worldSetting.description || deduceResult.worldSetting.overview || '暂无描述'}
+                    </div>
+                    {deduceResult.worldSetting.rules?.length > 0 && (
+                      <>
+                        <div style={{ fontSize: '11px', color: '#6366f1', fontWeight: 600, marginBottom: '4px' }}>📋 规则（{deduceResult.worldSetting.rules.length} 条）</div>
+                        {deduceResult.worldSetting.rules.map((r: any, idx: number) => (
+                        <div key={idx} style={{ padding: '6px 10px', background: '#1a1a1a', borderRadius: '4px', marginBottom: '4px', fontSize: '12px', color: '#aaa', lineHeight: 1.4, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
+                            <span style={{ color: '#6366f1', fontWeight: 500 }}>{r.name}</span>
+                            {r.description && <span>：{r.description}</span>}
+                          </div>
+                        ))}
+                      </>
+                    )}
+                    {deduceResult.worldSetting.locations?.length > 0 && (
+                      <div style={{ marginBottom: '8px' }}>
+                        <div style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, marginBottom: '4px' }}>📍 地点（{deduceResult.worldSetting.locations.length} 个）</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {deduceResult.worldSetting.locations.map((loc: any, idx: number) => (
+                            <span key={idx} style={{ padding: '4px 10px', background: 'rgba(16,185,129,0.1)', color: '#34d399', borderRadius: '6px', fontSize: '12px' }}>{loc.name}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {deduceResult.worldSetting.timeline?.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: '11px', color: '#f59e0b', fontWeight: 600, marginBottom: '4px' }}>📅 时间线（{deduceResult.worldSetting.timeline.length} 条）</div>
+                        {deduceResult.worldSetting.timeline.map((t: any, idx: number) => (
+                        <div key={idx} style={{ padding: '6px 10px', background: '#1a1a1a', borderRadius: '4px', marginBottom: '4px', fontSize: '12px', color: '#aaa', lineHeight: 1.4, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
+                            {t.title || t.name}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '8px' }}>
+                      {deduceResult.worldSetting.society && <span style={{ fontSize: '11px', color: '#888' }}>🏛️ 社会：{deduceResult.worldSetting.society}</span>}
+                      {deduceResult.worldSetting.culture && <span style={{ fontSize: '11px', color: '#888' }}>🎭 文化：{deduceResult.worldSetting.culture}</span>}
+                      {deduceResult.worldSetting.economy && <span style={{ fontSize: '11px', color: '#888' }}>💰 经济：{deduceResult.worldSetting.economy}</span>}
+                    </div>
+                  </div>
+                )}
+
+                {/* 剧情事件 */}
+                {deduceResult.plotLine?.events?.length > 0 && (
+                  <div style={{ background: '#0f0f0f', borderRadius: '10px', padding: '14px' }}>
+                    <div style={{ fontSize: '12px', color: '#f472b6', fontWeight: 600, marginBottom: '8px' }}>📈 剧情事件（共 {deduceResult.plotLine.events.length} 个）</div>
+                    {deduceResult.plotLine.events.map((evt: any, idx: number) => (
+                    <div style={{ padding: '6px 10px', background: '#1a1a1a', borderRadius: '4px', marginBottom: '4px', fontSize: '12px', color: '#ccc', lineHeight: 1.4, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
+                        <span style={{ color: '#f472b6', fontWeight: 600 }}>#{idx + 1}</span> {evt.title}
+                        {evt.description && <span style={{ color: '#888' }}> — {evt.description}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* 主角信息 */}
+                {deduceResult.protagonist && (
+                  <div style={{ background: '#0f0f0f', borderRadius: '10px', padding: '14px' }}>
+                    <div style={{ fontSize: '12px', color: '#818cf8', fontWeight: 600, marginBottom: '8px' }}>⭐ 主角</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '6px' }}>
+                      <span style={{ fontSize: '12px', padding: '4px 8px', background: '#1a1a1a', borderRadius: '4px', color: '#ccc' }}>姓名：{deduceResult.protagonist.name}</span>
+                      {deduceResult.protagonist.basicInfo?.gender && <span style={{ fontSize: '12px', padding: '4px 8px', background: '#1a1a1a', borderRadius: '4px', color: '#ccc' }}>性别：{deduceResult.protagonist.basicInfo.gender}</span>}
+                      {deduceResult.protagonist.basicInfo?.age && <span style={{ fontSize: '12px', padding: '4px 8px', background: '#1a1a1a', borderRadius: '4px', color: '#ccc' }}>年龄：{deduceResult.protagonist.basicInfo.age}</span>}
+                      {deduceResult.protagonist.basicInfo?.occupation && <span style={{ fontSize: '12px', padding: '4px 8px', background: '#1a1a1a', borderRadius: '4px', color: '#ccc' }}>职业：{deduceResult.protagonist.basicInfo.occupation}</span>}
+                    </div>
+                    {deduceResult.protagonist.personality?.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                        {deduceResult.protagonist.personality.map((p: string, idx: number) => (
+                          <span key={idx} style={{ fontSize: '11px', padding: '2px 8px', background: 'rgba(139,92,246,0.1)', color: '#a78bfa', borderRadius: '4px' }}>{p}</span>
+                        ))}
+                      </div>
+                    )}
+                    {deduceResult.protagonist.appearance && (
+                      <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '4px', lineHeight: 1.5, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
+                        <span style={{ color: '#888' }}>外貌：</span>{deduceResult.protagonist.appearance}
+                      </div>
+                    )}
+                    {deduceResult.protagonist.background && (
+                      <div style={{ fontSize: '12px', color: '#888', lineHeight: 1.6, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
+                        <span style={{ color: '#888' }}>背景：</span>{deduceResult.protagonist.background}
+                      </div>
+                    )}
+                    {deduceResult.protagonist.abilities && (
+                      <div style={{ fontSize: '12px', color: '#666', marginTop: '4px', lineHeight: 1.5, wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
+                        <span style={{ color: '#888' }}>能力：</span>{deduceResult.protagonist.abilities}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </PageWrapper>
