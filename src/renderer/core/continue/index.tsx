@@ -138,8 +138,8 @@ export default function ContinuePage() {
   const previousContext = useMemo(() => {
     if (!selectedChapter) return ''
     const idx = sortedChapters.findIndex((c) => c.id === selectedChapter.id)
-    if (idx <= 0) return selectedChapter.content
-    const prevChapters = sortedChapters.slice(0, idx)
+    if (idx <= 0) return selectedChapter.content || ''
+    const prevChapters = sortedChapters.slice(0, idx).filter((c) => c.content && c.content.trim().length > 0)
     return prevChapters
       .map((c) => `【${c.title}】\n${c.content}`)
       .join('\n\n')

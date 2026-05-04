@@ -89,7 +89,7 @@ export default function PlotView() {
     data: { label: char.name },
     position: { x: 100 + (i % 4) * 200, y: 100 + Math.floor(i / 4) * 150 },
     style: {
-      background: char.roleType === '主角' ? 'rgba(99,102,241,0.2)' : 'rgba(168,85,247,0.15)',
+      background: char.roleType === 'protagonist' ? 'rgba(99,102,241,0.2)' : 'rgba(168,85,247,0.15)',
       color: '#e0e0e0',
       border: '1px solid #333',
       borderRadius: '10px',
@@ -419,7 +419,7 @@ export default function PlotView() {
 
                         <input
                           value={evt.title}
-                          onChange={(e) => setEmotionEvents(prev => prev.map(e => e.id === evt.id ? { ...e, title: e.target.value } : e))}
+                          onChange={(event) => setEmotionEvents(prev => prev.map(e => e.id === evt.id ? { ...e, title: event.target.value } : e))}
                           placeholder="事件标题（如：初次相遇、表白、亲密关系）"
                           style={{
                             flex: 1,
@@ -493,7 +493,7 @@ export default function PlotView() {
 
                       <textarea
                         value={evt.description}
-                        onChange={(e) => setEmotionEvents(prev => prev.map(e => e.id === evt.id ? { ...e, description: e.target.value } : e))}
+                        onChange={(event) => setEmotionEvents(prev => prev.map(e => e.id === evt.id ? { ...e, description: event.target.value } : e))}
                         placeholder="事件详细描述..."
                         rows={3}
                         style={{
@@ -750,8 +750,8 @@ export default function PlotView() {
                         padding: '2px 10px',
                         borderRadius: '6px',
                         fontSize: '12px',
-                        background: ch.status === '完成' ? 'rgba(34,197,94,0.15)' : 'rgba(234,179,8,0.15)',
-                        color: ch.status === '完成' ? '#4ade80' : '#facc15',
+                        background: ch.status === 'completed' ? 'rgba(34,197,94,0.15)' : 'rgba(234,179,8,0.15)',
+                        color: ch.status === 'completed' ? '#4ade80' : '#facc15',
                       }}
                     >
                       {ch.status || '草稿'}

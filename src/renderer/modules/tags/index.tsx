@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import PageWrapper from '../../components/PageWrapper'
 import { useStore } from '../../store'
 import { TAG_CATEGORY_CONFIG, PRESET_TAG_GROUPS, offlineExpand } from '../../constants/tagPrompts'
-import type { TagCategory } from '../../config/types'
+import type { TagCategory } from '../../../config/types'
 
 export default function Tags() {
   const tags = useStore((s) => s.tags)
@@ -48,7 +48,7 @@ export default function Tags() {
     const result = offlineExpand(keywords)
     setExpansionResult(result)
     setIsExpanding(false)
-    addLog({ type: 'INFO', message: '标签智能扩展完成', timestamp: Date.now() })
+    addLog({ type: 'info', message: '标签智能扩展完成', detail: null })
   }
 
   // 应用扩展结果

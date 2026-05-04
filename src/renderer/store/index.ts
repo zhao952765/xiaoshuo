@@ -35,6 +35,18 @@ interface StoreState {
   emotionEvents: Array<{ id: string; title: string; description: string; type: 'emotion' | 'adult'; characterIds: string[]; order: number }>
   outlineNodes: Array<{ id: string; title: string; content: string; order: number }>
 
+  // ========== 推导任务状态（跨页面持久） ==========
+  deduceTask: {
+    isRunning: boolean
+    theme: string
+    maleCount: number
+    femaleCount: number
+    targetLength: string
+    result: any | null
+    error: string | null
+    startTime: number
+  } | null
+
   // ========== UI 状态 ==========
   isLoading: boolean
   adultMode: boolean
@@ -124,8 +136,14 @@ interface StoreActions {
   setDefaultMaxTokens: (tokens: number) => void
   setApiTimeout: (timeout: number) => void
 
+  // ========== 推导任务管理 ==========
+  startDeduceTask: (params: { theme: string; maleCount: number; femaleCount: number; targetLength: string }) => void
+  completeDeduceTask: (result: any) => void
+  failDeduceTask: (error: string) => void
+  clearDeduceTask: () => void
+
   // ========== 数据导入导出 ==========
-  importFromDeduce: (result: OneClickResult) => void
+  importFromDeduce: (result: OneClickResult, firstChapterContent?: string) => void
   importFromLongPlan: (volumes: Volume[], chapters: Chapter[]) => void
   applyPolishResult: (chapterId: string, result: PolishResult) => void
 
@@ -155,6 +173,7 @@ const initialState: StoreState = {
   selectedTagIds: [],
   emotionEvents: [],
   outlineNodes: [],
+  deduceTask: null,
   fontSize: 'medium',
   autoSaveInterval: 5,
   autoBackup: false,
@@ -468,8 +487,29 @@ export const useAppStore = create<StoreState & StoreActions>()(
       setDefaultMaxTokens: (tokens) => set({ defaultMaxTokens: tokens }),
       setApiTimeout: (timeout) => set({ apiTimeout: timeout }),
 
+      // ----- 推导任务管理（跨页面持久） -----
+      startDeduceTask: (params) => set({
+        deduceTask: {
+          isRunning: true,
+          theme: params.theme,
+          maleCount: params.maleCount,
+          femaleCount: params.femaleCount,
+          targetLength: params.targetLength,
+          result: null,
+          error: null,
+          startTime: Date.now(),
+        },
+      }),
+      completeDeduceTask: (result) => set((state) => ({
+        deduceTask: state.deduceTask ? { ...state.deduceTask, isRunning: false, result } : null,
+      })),
+      failDeduceTask: (error) => set((state) => ({
+        deduceTask: state.deduceTask ? { ...state.deduceTask, isRunning: false, error } : null,
+      })),
+      clearDeduceTask: () => set({ deduceTask: null }),
+
       // ----- 一键推导结果导入 -----
-      importFromDeduce: (result) =>
+      importFromDeduce: (result, firstChapterContent?: string) =>
         set((state) => {
           // 安全降级
           const safeResult = {
@@ -498,7 +538,7 @@ export const useAppStore = create<StoreState & StoreActions>()(
             id: genId(),
             title: ch.title,
             summary: ch.summary,
-            content: '',
+            content: index === 0 && firstChapterContent ? firstChapterContent : '',
             order: index,
             status: 'draft' as const,
             volumeId: null,
@@ -540,6 +580,7 @@ export const useAppStore = create<StoreState & StoreActions>()(
             order: idx,
           }))
 
+          // 创建新的小说对象，只存储 ID 引用
           const novel: Novel = {
             id: genId(),
             title: safeResult.title,
@@ -557,14 +598,19 @@ export const useAppStore = create<StoreState & StoreActions>()(
             outlineNodes,
           }
 
+          // 完全替换旧数据，不追加
           return {
             currentNovel: novel,
             characters: allChars,
             worldSettings: [safeResult.worldSetting],
             plotLines: [safeResult.plotLine],
             chapters: newChapters,
+            volumes: [], // 清空卷数据
             emotionEvents,
             outlineNodes,
+            memories: [], // 清空记忆
+            conversations: [], // 清空对话
+            logs: [], // 清空日志
           }
         }),
 
