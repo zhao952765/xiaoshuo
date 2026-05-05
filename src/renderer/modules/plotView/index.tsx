@@ -76,6 +76,17 @@ export default function PlotView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [novelId])
 
+  // 修复：大纲和感情线修改后自动同步到 store，避免切页丢失
+  useEffect(() => {
+    updateOutlineNodes(outlineNodes)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outlineNodes])
+
+  useEffect(() => {
+    updateEmotionEvents(emotionEvents)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emotionEvents])
+
   const saveSummary = () => {
     updateNovel({ title: editTitle, summary: editSummary })
     updateEmotionEvents(emotionEvents)

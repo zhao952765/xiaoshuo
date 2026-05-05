@@ -34,7 +34,8 @@ function Label({ children }: { children: React.ReactNode }) {
 // ==========================================
 export default function SettingsPage() {
   const [tab, setTab] = useState<TabKey>('general')
-  const [confirmReset, setConfirmReset] = useState(false)
+      const [confirmReset, setConfirmReset] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   /* ---- Store 数据 ---- */
@@ -57,6 +58,7 @@ export default function SettingsPage() {
   const exportProject = useAppStore((s) => s.exportProject)
   const loadProject = useAppStore((s) => s.loadProject)
   const resetAll = useAppStore((s) => s.resetAll)
+  const clearAllData = useAppStore((s) => s.clearAllData)
   const addLog = useAppStore((s) => s.addLog)
   const currentNovel = useAppStore((s) => s.currentNovel)
 
@@ -246,22 +248,42 @@ export default function SettingsPage() {
               <div style={{ borderTop: '1px solid #252525', paddingTop: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                   <div style={{ fontSize: '12px', color: '#ef4444' }}>清除所有数据</div>
-                  <div style={{ fontSize: '11px', color: '#666', marginTop: '2px' }}>删除所有小说、角色、章节、记忆等数据，不可恢复</div>
+                  <div style={{ fontSize: '11px', color: '#666', marginTop: '2px' }}>删除所有小说、角色、章节、记忆等数据，保留 AI 模型配置，不可恢复</div>
                 </div>
-                <button onClick={() => setConfirmReset(true)} style={{ background: '#ef444410', color: '#ef4444', border: '1px solid #ef444430', borderRadius: '8px', padding: '6px 12px', fontSize: '12px', cursor: 'pointer' }}>清除全部</button>
+                <button onClick={() => setConfirmClear(true)} style={{ background: '#ef444410', color: '#ef4444', border: '1px solid #ef444430', borderRadius: '8px', padding: '6px 12px', fontSize: '12px', cursor: 'pointer' }}>清除全部</button>
+              </div>
+              <div style={{ borderTop: '1px solid #252525', paddingTop: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ fontSize: '12px', color: '#ef4444' }}>恢复出厂设置</div>
+                  <div style={{ fontSize: '11px', color: '#666', marginTop: '2px' }}>删除所有数据包括 AI 模型配置，完全恢复到初始状态</div>
+                </div>
+                <button onClick={() => setConfirmReset(true)} style={{ background: '#ef444410', color: '#ef4444', border: '1px solid #ef444430', borderRadius: '8px', padding: '6px 12px', fontSize: '12px', cursor: 'pointer' }}>恢复出厂</button>
               </div>
             </div>
           </Card>
         </div>
       )}
 
-      {confirmReset && (
+      {confirmClear && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#00000099', backdropFilter: 'blur(4px)' }}>
           <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '12px', width: '90%', maxWidth: '384px', padding: '20px' }}>
             <div style={{ fontSize: '14px', fontWeight: 500, color: '#ef4444', marginBottom: '12px' }}>确认清除所有数据</div>
-            <p style={{ fontSize: '14px', color: '#e0e0e0', margin: '0 0 16px' }}>此操作将永久删除所有项目数据，包括小说、角色、章节、记忆、标签等。此操作不可撤销。</p>
+            <p style={{ fontSize: '14px', color: '#e0e0e0', margin: '0 0 16px' }}>此操作将永久删除所有项目数据，包括小说、角色、章节、记忆、标签、日志等。<span style={{ color: '#6366f1' }}>AI 模型配置将被保留。</span>此操作不可撤销。</p>
             <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={() => { resetAll(); setConfirmReset(false); addLog({ type: 'warn', message: '已清除所有数据', detail: null }) }} style={{ flex: 1, padding: '8px 12px', borderRadius: '8px', fontSize: '12px', background: '#ef444410', color: '#ef4444', border: '1px solid #ef444430', cursor: 'pointer' }}>确认清除</button>
+              <button onClick={() => { clearAllData(); setConfirmClear(false); addLog({ type: 'warn', message: '已清除所有项目数据（保留 AI 模型）', detail: null }) }} style={{ flex: 1, padding: '8px 12px', borderRadius: '8px', fontSize: '12px', background: '#ef444410', color: '#ef4444', border: '1px solid #ef444430', cursor: 'pointer' }}>确认清除</button>
+              <button onClick={() => setConfirmClear(false)} style={{ flex: 1, padding: '8px 12px', borderRadius: '8px', fontSize: '12px', background: '#1a1a1a', color: '#ccc', border: '1px solid #333', cursor: 'pointer' }}>取消</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmReset && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#00000099', backdropFilter: 'blur(4px)' }}>
+          <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '12px', width: '90%', maxWidth: '384px', padding: '20px' }}>
+            <div style={{ fontSize: '14px', fontWeight: 500, color: '#ef4444', marginBottom: '12px' }}>确认恢复出厂设置</div>
+            <p style={{ fontSize: '14px', color: '#e0e0e0', margin: '0 0 16px' }}>此操作将永久删除所有数据，包括 AI 模型配置，完全恢复到初始状态。此操作不可撤销。</p>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={() => { resetAll(); setConfirmReset(false); addLog({ type: 'warn', message: '已恢复出厂设置', detail: null }) }} style={{ flex: 1, padding: '8px 12px', borderRadius: '8px', fontSize: '12px', background: '#ef444410', color: '#ef4444', border: '1px solid #ef444430', cursor: 'pointer' }}>确认恢复</button>
               <button onClick={() => setConfirmReset(false)} style={{ flex: 1, padding: '8px 12px', borderRadius: '8px', fontSize: '12px', background: '#1a1a1a', color: '#ccc', border: '1px solid #333', cursor: 'pointer' }}>取消</button>
             </div>
           </div>

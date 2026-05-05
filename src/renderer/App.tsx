@@ -3,6 +3,7 @@ import { HashRouter, Routes, Route } from 'react-router-dom'
 import { useStore } from './store'
 import Sidebar from './components/Sidebar'
 import ErrorBoundary from './components/ErrorBoundary'
+import SafeRender from './components/SafeRender'
 import Dashboard from './pages/dashboard'
 import Deduce from './core/deduce'
 import LongPlan from './core/longPlan'
@@ -86,20 +87,20 @@ function App() {
         }}>
           <ErrorBoundary>
           <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/deduce" element={<Deduce />} />
-            <Route path="/longplan" element={<LongPlan />} />
-            <Route path="/continue" element={<ContinueWrite />} />
-            <Route path="/polish" element={<Polish />} />
-            <Route path="/character" element={<Character />} />
-            <Route path="/world" element={<World />} />
-            <Route path="/plotview" element={<PlotView />} />
-            <Route path="/tags" element={<Tags />} />
-            <Route path="/memory" element={<Memory />} />
-            <Route path="/aimodel" element={<AIModel />} />
-            <Route path="/chat" element={<Chat />} />
-            <Route path="/logs" element={<Logs />} />
-            <Route path="/settings" element={<Settings />} />
+            <Route path="/" element={<SafeRender><Dashboard /></SafeRender>} />
+            <Route path="/deduce" element={<SafeRender><Deduce /></SafeRender>} />
+            <Route path="/longplan" element={<SafeRender><LongPlan /></SafeRender>} />
+            <Route path="/continue" element={<SafeRender><ContinueWrite /></SafeRender>} />
+            <Route path="/polish" element={<SafeRender><Polish /></SafeRender>} />
+            <Route path="/character" element={<SafeRender><Character /></SafeRender>} />
+            <Route path="/world" element={<SafeRender><World /></SafeRender>} />
+            <Route path="/plotview" element={<SafeRender><PlotView /></SafeRender>} />
+            <Route path="/tags" element={<SafeRender><Tags /></SafeRender>} />
+            <Route path="/memory" element={<SafeRender><Memory /></SafeRender>} />
+            <Route path="/aimodel" element={<SafeRender><AIModel /></SafeRender>} />
+            <Route path="/chat" element={<SafeRender><Chat /></SafeRender>} />
+            <Route path="/logs" element={<SafeRender><Logs /></SafeRender>} />
+            <Route path="/settings" element={<SafeRender><Settings /></SafeRender>} />
           </Routes>
           </ErrorBoundary>
         </main>

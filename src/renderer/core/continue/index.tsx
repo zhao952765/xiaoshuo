@@ -99,6 +99,7 @@ export default function ContinuePage() {
   // ----- Store 写入 -----
   const updateChapter = useAppStore((s) => s.updateChapter)
   const addLog = useAppStore((s) => s.addLog)
+  const addMemory = useAppStore((s) => s.addMemory)
 
   // ----- 本地状态 -----
   const [selectedChapterId, setSelectedChapterId] = useState('')
@@ -279,6 +280,17 @@ export default function ContinuePage() {
         message: '自动续写完成',
         detail: `${selectedChapter.title}，约 ${result.length} 字`,
       })
+      addMemory({
+        id: `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+        type: 'llm',
+        content: `自动续写完成：${selectedChapter.title}\n生成约 ${result.length} 字`,
+        source: '自动续写',
+        tags: ['续写', 'AI生成'],
+        modelName: selectedModel?.name ?? null,
+        projectId: currentNovel?.id ?? null,
+        timestamp: Date.now(),
+        duration: null,
+      })
     } catch (err) {
       const msg = err instanceof Error ? err.message : '未知错误'
       setError(`续写失败：${msg}`)
@@ -311,7 +323,18 @@ export default function ContinuePage() {
       message: '续写内容已保存',
       detail: selectedChapter.title,
     })
-  }, [selectedChapter, generated, updateChapter, addLog])
+    addMemory({
+      id: `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+      type: 'auto',
+      content: `续写内容已保存：${selectedChapter.title}`,
+      source: '自动续写保存',
+      tags: ['续写', '保存'],
+      modelName: null,
+      projectId: currentNovel?.id ?? null,
+      timestamp: Date.now(),
+      duration: null,
+    })
+  }, [selectedChapter, generated, updateChapter, addLog, addMemory, currentNovel])
 
   const handleReplace = useCallback(() => {
     if (!selectedChapter || !generated.trim()) return

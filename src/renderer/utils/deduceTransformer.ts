@@ -22,7 +22,7 @@ import {
   parseSupportingChars,
   parseWorldview,
 } from './deduceParser'
-import { parseMarkdownFields, cleanMarkdown, extractNameFromText } from './markdownParser'
+import { parseProtagonistFields, cleanMarkdown, extractNameFromText } from './markdownParser'
 
 // ==================== ID 生成 ====================
 const genId = (): string => `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
@@ -279,7 +279,8 @@ export function mapOldResultToCurrent(raw: string): DeduceInput {
 
 /** 主角信息结构化解析：使用 markdownParser 提取结构化字段 */
 function parseProtagonist(text: string, now: number): Character {
-  const fields = parseMarkdownFields(text);
+  // 修复：使用 parseProtagonistFields 兼容纯段落无字段名前缀的格式
+  const fields = parseProtagonistFields(text);
 
   // 提取姓名
   const name = extractNameFromText(text) || '主角';
@@ -295,7 +296,7 @@ function parseProtagonist(text: string, now: number): Character {
   const ageMatch = (fields['年龄'] || text).match(/(\d{1,3})\s*岁/);
   if (ageMatch) age = ageMatch[1] + '岁';
 
-  // 提取外貌
+  // 提取外貌（修复：兼容纯段落外貌描写）
   const appearance = cleanMarkdown(
     fields['外貌'] || fields['外貌特征'] || fields['形象'] || ''
   );
@@ -316,7 +317,12 @@ function parseProtagonist(text: string, now: number): Character {
 
   // 提取能力/特长
   const abilities = cleanMarkdown(
-    fields['能力'] || fields['特长'] || fields['技能'] || ''
+    fields['能力'] || fields['特长'] || fields['技能'] || fields['异能'] || fields['法术'] || fields['武功'] || ''
+  );
+
+  // 提取目标/人物弧线
+  const arc = cleanMarkdown(
+    fields['目标'] || fields['核心动机'] || fields['动机'] || fields['人物弧线'] || fields['弧线'] || fields['追求'] || fields['梦想'] || ''
   );
 
   return {
@@ -332,7 +338,7 @@ function parseProtagonist(text: string, now: number): Character {
     relationships: [],
     voice: '',
     innerWorld: '',
-    arc: '',
+    arc,
     tags: [],
     createdAt: now,
     updatedAt: now,

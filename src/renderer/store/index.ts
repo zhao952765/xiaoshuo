@@ -61,6 +61,9 @@ interface StoreState {
   defaultTemperature: number
   defaultMaxTokens: number
   apiTimeout: number
+
+  // ========== 上次推导结果（页面级持久） ==========
+  lastDeduceResult: OneClickResult | null
 }
 
 interface StoreActions {
@@ -154,6 +157,8 @@ interface StoreActions {
   exportProject: () => Record<string, unknown>
   loadProject: (data: Record<string, unknown>) => void
   resetAll: () => void
+  clearAllData: () => void
+  setLastDeduceResult: (result: OneClickResult | null) => void
 
   // ========== 推导结果更新 ==========
   updateEmotionEvents: (events: Array<{ id: string; title: string; description: string; type: 'emotion' | 'adult' | 'conflict' | 'climax'; characterIds: string[]; order: number }>) => void
@@ -188,6 +193,7 @@ const initialState: StoreState = {
   defaultTemperature: 0.7,
   defaultMaxTokens: 4096,
   apiTimeout: 60,
+  lastDeduceResult: null,
 }
 
 export const useAppStore = create<StoreState & StoreActions>()(
@@ -668,6 +674,40 @@ export const useAppStore = create<StoreState & StoreActions>()(
 
       // ----- 重置全部 -----
       resetAll: () => set({ ...initialState }),
+
+      // ----- 设置上次推导结果 -----
+      setLastDeduceResult: (result) => set({ lastDeduceResult: result }),
+
+      // ----- 清除所有项目数据（保留 AI 模型和应用设置）-----
+      clearAllData: () =>
+        set((state) => ({
+          currentNovel: null,
+          characters: [],
+          worldSettings: [],
+          chapters: [],
+          volumes: [],
+          plotLines: [],
+          tags: [],
+          memories: [],
+          logs: [],
+          conversations: [],
+          isLoading: false,
+          selectedTagIds: [],
+          emotionEvents: [],
+          outlineNodes: [],
+          deduceTask: null,
+          lastDeduceResult: null,
+          // 保留 AI 模型和应用设置
+          aiModels: state.aiModels,
+          currentModel: state.currentModel,
+          fontSize: state.fontSize,
+          autoSaveInterval: state.autoSaveInterval,
+          autoBackup: state.autoBackup,
+          defaultTemperature: state.defaultTemperature,
+          defaultMaxTokens: state.defaultMaxTokens,
+          apiTimeout: state.apiTimeout,
+          adultMode: state.adultMode,
+        })),
     }),
     {
       name: 'private-novel-studio-pro-storage',
@@ -695,6 +735,7 @@ export const useAppStore = create<StoreState & StoreActions>()(
         defaultMaxTokens: state.defaultMaxTokens,
         apiTimeout: state.apiTimeout,
         deduceTask: state.deduceTask,
+        lastDeduceResult: state.lastDeduceResult,
       }),
     }
   )

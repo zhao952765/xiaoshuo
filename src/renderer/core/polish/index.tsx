@@ -126,6 +126,7 @@ export default function PolishPage() {
   const currentModel = useAppStore((s) => s.currentModel)
   const adultMode = useAppStore((s) => s.adultMode)
   const addLog = useAppStore((s) => s.addLog)
+  const addMemory = useAppStore((s) => s.addMemory)
 
   const [selectedModelId, setSelectedModelId] = useState(
     currentModel?.id ?? ''
@@ -259,6 +260,17 @@ export default function PolishPage() {
         type: 'success',
         message: '文本润色完成',
         detail: `风格：${styleConfigMap[style].label}，原 ${original.length} 字 → 润色后 ${result.length} 字`,
+      })
+      addMemory({
+        id: `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+        type: 'llm',
+        content: `文本润色完成\n风格：${styleConfigMap[style].label}\n原 ${original.length} 字 → 润色后 ${result.length} 字`,
+        source: '文本润色',
+        tags: ['润色', 'AI生成', styleConfigMap[style].label],
+        modelName: selectedModel?.name ?? null,
+        projectId: null,
+        timestamp: Date.now(),
+        duration: null,
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : '未知错误'

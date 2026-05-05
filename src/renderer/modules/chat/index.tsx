@@ -142,6 +142,8 @@ export default function ChatPage() {
   const updateConversation = useAppStore((s) => s.updateConversation)
   const removeConversation = useAppStore((s) => s.removeConversation)
   const clearConversations = useAppStore((s) => s.clearConversations)
+  const addMemory = useAppStore((s) => s.addMemory)
+  const addLog = useAppStore((s) => s.addLog)
 
   const [activeId, setActiveId] = useState<string | null>(null)
   const [input, setInput] = useState('')
@@ -236,6 +238,22 @@ export default function ChatPage() {
             ? input.trim().slice(0, 20) || '新对话'
             : activeConversation.title,
       })
+      addLog({
+        type: 'success',
+        message: 'AI 对话回复完成',
+        detail: activeConversation.title,
+      })
+      addMemory({
+        id: `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+        type: 'llm',
+        content: `AI 对话：${activeConversation.title}\n用户：${input.trim().slice(0, 100)}...`,
+        source: 'AI 对话助手',
+        tags: ['对话', 'AI生成'],
+        modelName: currentModel?.name ?? null,
+        projectId: currentNovel?.id ?? null,
+        timestamp: Date.now(),
+        duration: null,
+      })
     } catch (e: unknown) {
       const errMsg = e instanceof Error ? e.message : String(e)
       const finalMessages = [
@@ -248,6 +266,7 @@ export default function ChatPage() {
         },
       ]
       updateConversation(activeConversation.id, { messages: finalMessages })
+      addLog({ type: 'error', message: 'AI 对话调用失败', detail: errMsg })
     } finally {
       setLoading(false)
     }

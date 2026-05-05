@@ -1,4 +1,5 @@
 import { useStore } from '../../store'
+import { useRef, useCallback } from 'react'
 
 export default function Dashboard() {
   const novel = useStore((s) => s.currentNovel)
@@ -7,6 +8,41 @@ export default function Dashboard() {
   const worlds = useStore((s) => s.worldSettings)
   const tags = useStore((s) => s.tags)
   const memories = useStore((s) => s.memories)
+  const logs = useStore((s) => s.logs)
+
+  const exportProject = useStore((s) => s.exportProject)
+  const loadProject = useStore((s) => s.loadProject)
+  const addLog = useStore((s) => s.addLog)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleExport = useCallback(() => {
+    const data = exportProject()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${novel?.title || 'project'}_${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    addLog({ type: 'success', message: '项目导出成功', detail: `文件名: ${a.download}` })
+  }, [exportProject, novel, addLog])
+
+  const handleImport = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string)
+        loadProject(data)
+        addLog({ type: 'success', message: '项目导入成功', detail: `文件: ${file.name}` })
+      } catch (err) {
+        addLog({ type: 'error', message: '项目导入失败', detail: String(err) })
+      }
+    }
+    reader.readAsText(file)
+    e.target.value = ''
+  }, [loadProject, addLog])
 
   const stats = [
     { label: '角色', count: characters.length, icon: '👥', bg: 'rgba(168,85,247,0.1)', color: '#c084fc' },
@@ -30,7 +66,14 @@ export default function Dashboard() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button style={{
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json"
+            onChange={handleImport}
+            style={{ display: 'none' }}
+          />
+          <button onClick={handleExport} style={{
             padding: '8px 16px',
             background: '#1a1a1a',
             border: '1px solid #333',
@@ -41,7 +84,7 @@ export default function Dashboard() {
           }}>
             导出项目
           </button>
-          <button style={{
+          <button onClick={() => fileInputRef.current?.click()} style={{
             padding: '8px 16px',
             background: '#6366f1',
             border: 'none',
@@ -58,7 +101,7 @@ export default function Dashboard() {
       {/* 统计卡片 - 3列 */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(3, 1fr)',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
         gap: '16px',
         marginBottom: '24px'
       }}>
@@ -126,13 +169,13 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 最近活动 */}
+      {/* 最近活动：从日志读取 */}
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
           <h3 style={{ fontSize: '12px', color: '#888', textTransform: 'uppercase', letterSpacing: '1px', margin: 0 }}>
             最近活动
           </h3>
-          <span style={{ fontSize: '12px', color: '#6366f1', cursor: 'pointer' }}>查看全部</span>
+          <span onClick={() => window.location.hash = '#/logs'} style={{ fontSize: '12px', color: '#6366f1', cursor: 'pointer' }}>查看全部</span>
         </div>
         <div style={{
           background: '#1a1a1a',
@@ -140,7 +183,27 @@ export default function Dashboard() {
           borderRadius: '12px',
           padding: '16px'
         }}>
-          <p style={{ margin: 0, color: '#666', fontSize: '14px' }}>暂无活动记录</p>
+          {logs.length === 0 ? (
+            <p style={{ margin: 0, color: '#666', fontSize: '14px' }}>暂无活动记录</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {logs.slice(0, 5).map((log) => (
+                <div key={log.id} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '50%',
+                    background: log.type === 'success' ? '#10b981' : log.type === 'error' ? '#ef4444' : log.type === 'warn' ? '#f59e0b' : '#3b82f6',
+                    flexShrink: 0,
+                  }} />
+                  <span style={{ fontSize: '13px', color: '#e0e0e0', flex: 1 }}>{log.message}</span>
+                  <span style={{ fontSize: '11px', color: '#666' }}>
+                    {new Date(log.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

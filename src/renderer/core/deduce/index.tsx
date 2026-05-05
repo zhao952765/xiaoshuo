@@ -24,6 +24,11 @@ import type {
   AIModel,
   OneClickResult,
   NovelLength,
+  Novel,
+  Character,
+  WorldSetting,
+  Chapter,
+  PlotLine,
 } from '../../../config/types'
 import {
   LENGTH_OPTIONS,
@@ -176,6 +181,47 @@ function getResultFieldContent(result: OneClickResult, key: string): { text: str
 }
 
 // ==========================================
+// 从 store 实时重建 OneClickResult（用于查看已保存内容）
+// ==========================================
+
+function rebuildResultFromStore(
+  novel: Novel,
+  allCharacters: Character[],
+  allWorlds: WorldSetting[],
+  allChapters: Chapter[],
+  allPlotLines: PlotLine[],
+): OneClickResult | null {
+  const now = Date.now()
+  const novelChars = allCharacters.filter((c) => novel.characters.includes(c.id))
+  const protagonist = novelChars.find((c) => c.roleType === 'protagonist') || {
+    id: '', name: '未命名主角', roleType: 'protagonist' as const, avatar: '',
+    basicInfo: { age: '', gender: '', occupation: '' },
+    appearance: '', personality: [], background: '', abilities: '',
+    relationships: [], voice: '', innerWorld: '', arc: '', tags: [],
+    createdAt: now, updatedAt: now,
+  }
+  const supporting = novelChars.filter((c) => c.roleType !== 'protagonist')
+  const novelWorlds = allWorlds.filter((w) => novel.worldSettings.includes(w.id))
+  const novelChapters = allChapters.filter((ch) => novel.chapters.includes(ch.id))
+  const novelPlotLines = allPlotLines.filter((p) => novel.plotLines.includes(p.id))
+  return {
+    title: novel.title,
+    summary: novel.summary,
+    protagonist,
+    supporting,
+    worldSetting: novelWorlds[0] || {
+      id: '', name: '', type: 'fantasy' as const, description: '', overview: '',
+      rules: [], locations: [], timeline: [], tags: [], createdAt: now, updatedAt: now,
+    },
+    plotLine: novelPlotLines[0] || {
+      id: '', name: '', description: '', events: [], createdAt: now, updatedAt: now,
+    },
+    chapters: novelChapters.map((ch) => ({ title: ch.title, summary: ch.summary || '' })),
+    firstChapter: novelChapters[0]?.content || '',
+  }
+}
+
+// ==========================================
 // 主组件
 // ==========================================
 
@@ -191,6 +237,14 @@ export default function DeducePage() {
   const toggleAdultMode = useAppStore((s) => s.toggleAdultMode)
   const importFromDeduce = useAppStore((s) => s.importFromDeduce)
   const addLog = useAppStore((s) => s.addLog)
+  const addMemory = useAppStore((s) => s.addMemory)
+  const currentNovelId = useAppStore((s) => s.currentNovel?.id ?? null)
+  const lastDeduceResult = useAppStore((s) => s.lastDeduceResult)
+  const setLastDeduceResult = useAppStore((s) => s.setLastDeduceResult)
+  const allCharacters = useAppStore((s) => s.characters)
+  const allWorlds = useAppStore((s) => s.worldSettings)
+  const allChapters = useAppStore((s) => s.chapters)
+  const allPlotLines = useAppStore((s) => s.plotLines)
 
   // 表单状态
   const [theme, setTheme] = useState('')
@@ -215,6 +269,7 @@ export default function DeducePage() {
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editingText, setEditingText] = useState('')
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const [saveSuccess, setSaveSuccess] = useState(false)
 
   // 模板面板
   const [showTemplates, setShowTemplates] = useState(false)
@@ -226,6 +281,15 @@ export default function DeducePage() {
   useEffect(() => {
     resultRef.current = result
   }, [result])
+
+  // 页面加载时：如果上次推导结果存在，自动恢复显示
+  // 修复：将 lastDeduceResult 加入依赖数组，确保 zustand persist 异步恢复后能触发
+  useEffect(() => {
+    if (lastDeduceResult && !result && !loading) {
+      setResult(lastDeduceResult)
+      setExpandedKeys(new Set(['title', 'summary']))
+    }
+  }, [lastDeduceResult])
 
   const selectedModel = aiModels.find((m) => m.id === selectedModelId) || currentModel
 
@@ -272,11 +336,114 @@ export default function DeducePage() {
       case 'summary':
         updated.summary = editingText
         break
+      case 'protagonist': {
+        // 将编辑后的纯文本重新解析为结构化字段
+        const lines = editingText.split('\n')
+        const p = { ...updated.protagonist }
+        for (const line of lines) {
+          const m = line.match(/^([^：:]+)[：:]\s*(.*)$/)
+          if (!m) continue
+          const [, key, val] = m
+          const v = val.trim()
+          if (!v) continue
+          if (key.includes('姓名') || key.includes('名字')) p.name = v
+          else if (key.includes('性别')) p.basicInfo = { ...p.basicInfo, gender: v }
+          else if (key.includes('年龄')) p.basicInfo = { ...p.basicInfo, age: v }
+          else if (key.includes('外貌')) p.appearance = v
+          else if (key.includes('性格')) p.personality = v.split(/[,，、;；]/).map(s => s.trim()).filter(s => s.length >= 2 && s.length <= 20)
+          else if (key.includes('背景')) p.background = v
+          else if (key.includes('能力')) p.abilities = v
+          else if (key.includes('目标')) p.arc = v
+        }
+        updated.protagonist = p
+        break
+      }
+      case 'supporting': {
+        // 配角编辑文本格式："1. 名字\n   性别：...\n   外貌：..."
+        // 按空行分割每个角色，再逐行解析
+        const entries = editingText.split(/\n\s*\n/).filter(Boolean)
+        const newSupporting = entries.map((entry, idx) => {
+          const lines = entry.split('\n').map(l => l.trim()).filter(Boolean)
+          const existing = updated.supporting?.[idx]
+          const c: typeof existing = existing
+            ? { ...existing }
+            : { id: `sup_${Date.now()}_${idx}`, name: '', roleType: 'supporting', avatar: '', basicInfo: { age: '', gender: '', occupation: '' }, appearance: '', personality: [], background: '', abilities: '', relationships: [], voice: '', innerWorld: '', arc: '', tags: [], createdAt: Date.now(), updatedAt: Date.now() }
+          for (const line of lines) {
+            const m = line.match(/^(?:\d+[\.、．]\s*)?([^：:]+)[：:]\s*(.*)$/)
+            if (!m) continue
+            const [, key, val] = m
+            const v = val.trim()
+            if (!v) continue
+            if (key.includes('姓名') || key.includes('名字')) c.name = v
+            else if (key.includes('性别')) c.basicInfo = { ...c.basicInfo, gender: v }
+            else if (key.includes('年龄')) c.basicInfo = { ...c.basicInfo, age: v }
+            else if (key.includes('外貌')) c.appearance = v
+            else if (key.includes('性格')) c.personality = v.split(/[,，、;；]/).map(s => s.trim()).filter(s => s.length >= 2 && s.length <= 20)
+            else if (key.includes('背景')) c.background = v
+            else if (key.includes('能力')) c.abilities = v
+            else if (key.includes('目标')) c.arc = v
+            else if (key.includes('关系')) {
+              c.relationships = [{ targetId: '', targetName: '主角', type: v, description: '' }]
+            }
+          }
+          return c
+        })
+        updated.supporting = newSupporting
+        break
+      }
+      case 'worldview': {
+        const w = { ...updated.worldSetting }
+        const lines = editingText.split('\n')
+        for (const line of lines) {
+          const m = line.match(/^([^：:]+)[：:]\s*(.*)$/)
+          if (!m) continue
+          const [, key, val] = m
+          const v = val.trim()
+          if (!v) continue
+          if (key.includes('概述')) w.overview = v
+          else if (key.includes('规则')) {
+            w.rules = v.split('\n').map(r => r.trim()).filter(r => r.length > 3).slice(0, 8).map(r => ({
+              name: r.replace(/^[-\d\.\s•]+/, '').split(/[:：]/)[0] || '规则',
+              description: r.replace(/^[-\d\.\s•]+/, ''),
+              scope: '', limit: '', sideEffect: '',
+            }))
+          }
+        }
+        updated.worldSetting = w
+        break
+      }
+      case 'emotionalLine':
+        updated.plotLine = updated.plotLine
+          ? { ...updated.plotLine, description: editingText }
+          : { id: '', type: 'main' as const, name: '', description: editingText, events: [], relatedCharacters: [], createdAt: Date.now(), updatedAt: Date.now() }
+        break
+      case 'chapterOutline':
+        updated.plotLine = updated.plotLine
+          ? { ...updated.plotLine, events: editingText.split('\n').filter(l => l.trim()).map((l, i) => ({
+              id: `evt_${i}`, title: l.replace(/^[-\d\.\s•]+/, '').split(/[:：]/)[0] || l,
+              description: l, order: i, chapterId: null,
+            })) }
+          : { id: '', type: 'main' as const, name: '', description: '', events: [], relatedCharacters: [], createdAt: Date.now(), updatedAt: Date.now() }
+        break
+      case 'chapterList': {
+        const chs: Array<{ title: string; summary: string }> = []
+        const lines = editingText.split('\n').map(l => l.trim()).filter(Boolean)
+        for (const line of lines) {
+          const m = line.match(/(?:第\s*\d+\s*章|第\s*[一二三四五六七八九十]+\s*章)?\s*[:：]?\s*(.+)/)
+          if (m) {
+            const parts = m[1].split(/[:：]/)
+            chs.push({ title: parts[0].trim(), summary: parts[1]?.trim() || '' })
+          }
+        }
+        updated.chapters = chs.length > 0 ? chs : updated.chapters
+        break
+      }
       case 'firstChapter':
         updated.firstChapter = editingText
         break
     }
     setResult(updated)
+    setLastDeduceResult(updated)
     setEditingKey(null)
     setEditingText('')
   }
@@ -416,6 +583,7 @@ export default function DeducePage() {
       }
 
       setResult(parsedResult)
+      setLastDeduceResult(parsedResult)
       // 默认展开标题和简介
       setExpandedKeys(new Set(['title', 'summary']))
 
@@ -425,6 +593,17 @@ export default function DeducePage() {
         type: 'success',
         message: `推导完成：${parsedResult.title}`,
         detail: `字数: ${totalChars.toLocaleString()}, 耗时: ${elapsed}s, 章节: ${parsedResult.chapters.length}, 角色: ${1 + parsedResult.supporting.length}`,
+      })
+      addMemory({
+        id: `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+        type: 'llm',
+        content: `一键推导完成：《${parsedResult.title}》\n主题：${theme.trim()}\n生成 ${parsedResult.chapters.length} 章，${1 + parsedResult.supporting.length} 个角色`,
+        source: '一键推导',
+        tags: ['推导', 'AI生成'],
+        modelName: selectedModel?.name ?? null,
+        projectId: currentNovelId,
+        timestamp: Date.now(),
+        duration: Number(elapsed) * 1000,
       })
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
@@ -439,7 +618,7 @@ export default function DeducePage() {
       setProgress(100)
       abortRef.current = null
     }
-  }, [theme, selectedModel, adultMode, length, maleCount, femaleCount, selectedTags, addLog])
+  }, [theme, selectedModel, adultMode, length, maleCount, femaleCount, selectedTags, addLog, setLastDeduceResult, currentNovelId, addMemory])
 
   const handleStop = () => {
     abortRef.current?.abort()
@@ -463,10 +642,20 @@ export default function DeducePage() {
         message: `项目已保存：${r.title}`,
         detail: `共 ${r.chapters?.length || 0} 章，${1 + (r.supporting?.length || 0)} 角色`,
       })
+      addMemory({
+        id: `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+        type: 'auto',
+        content: `保存推导项目：《${r.title}》`,
+        source: '一键推导保存',
+        tags: ['保存', '项目'],
+        modelName: null,
+        projectId: currentNovelId,
+        timestamp: Date.now(),
+        duration: null,
+      })
 
-      setTimeout(() => {
-        navigate('/plotview')
-      }, 100)
+      setSaveSuccess(true)
+      setTimeout(() => setSaveSuccess(false), 3000)
     })
   }
 
@@ -522,12 +711,56 @@ export default function DeducePage() {
         </motion.button>
       }
     >
-      {result ? (
+      {      result ? (
         /* ========== 结果展示区域 ========== */
         <motion.div {...fadeInUp} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {/* 视图切换 + 总字数 */}
+          {/* 保存成功提示 */}
+          <AnimatePresence>
+            {saveSuccess && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                style={{
+                  background: 'rgba(34,197,94,0.1)',
+                  border: '1px solid rgba(34,197,94,0.3)',
+                  borderRadius: '8px',
+                  padding: '10px 16px',
+                  color: '#4ade80',
+                  fontSize: '14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                <span>✓</span>
+                <span>项目已保存至全局数据，可直接在当前页面继续查看或编辑</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* 返回 + 视图切换 + 总字数 */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', gap: '6px' }}>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <button
+                onClick={() => {
+                  setResult(null)
+                  setExpandedKeys(new Set())
+                  setEditingKey(null)
+                }}
+                style={{
+                  padding: '6px 14px',
+                  background: 'transparent',
+                  border: '1px solid #333',
+                  borderRadius: '6px',
+                  color: '#888',
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  fontWeight: 500,
+                }}
+              >
+                ← 返回
+              </button>
               <button
                 onClick={() => setViewMode('card')}
                 style={{
@@ -1460,20 +1693,49 @@ export default function DeducePage() {
                 <span style={{ fontSize: '14px', fontWeight: 600, color: '#ccc' }}>
                   📂 已保存项目
                 </span>
-                <button
-                  onClick={() => navigate('/plotview')}
-                  style={{
-                    padding: '4px 10px',
-                    background: 'transparent',
-                    border: '1px solid #333',
-                    borderRadius: '4px',
-                    color: '#888',
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  查看剧情观 →
-                </button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    onClick={() => {
+                      // 优先使用 lastDeduceResult，如果不存在则从 currentNovel 实时重建
+                      if (lastDeduceResult) {
+                        setResult(lastDeduceResult)
+                        setExpandedKeys(new Set(['title', 'summary']))
+                      } else if (currentNovel) {
+                        // 从 store 中实时重建 OneClickResult
+                        const r = rebuildResultFromStore(currentNovel, allCharacters, allWorlds, allChapters, allPlotLines)
+                        if (r) {
+                          setResult(r)
+                          setExpandedKeys(new Set(['title', 'summary']))
+                        }
+                      }
+                    }}
+                    style={{
+                      padding: '4px 10px',
+                      background: 'rgba(99,102,241,0.1)',
+                      border: '1px solid rgba(99,102,241,0.2)',
+                      borderRadius: '4px',
+                      color: '#6366f1',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    查看内容
+                  </button>
+                  <button
+                    onClick={handleReDeduce}
+                    style={{
+                      padding: '4px 10px',
+                      background: 'transparent',
+                      border: '1px solid #333',
+                      borderRadius: '4px',
+                      color: '#888',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    重新推导
+                  </button>
+                </div>
               </div>
               <div style={{
                 display: 'flex',
@@ -1491,20 +1753,6 @@ export default function DeducePage() {
                     {currentNovel.chapters?.length || 0} 章 · {currentNovel.characters?.length || 0} 角色
                   </div>
                 </div>
-                <button
-                  onClick={handleReDeduce}
-                  style={{
-                    padding: '6px 12px',
-                    background: 'rgba(99,102,241,0.1)',
-                    border: '1px solid rgba(99,102,241,0.2)',
-                    borderRadius: '6px',
-                    color: '#6366f1',
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  重新推导
-                </button>
               </div>
             </motion.div>
           )}

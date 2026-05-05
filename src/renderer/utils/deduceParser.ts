@@ -17,7 +17,7 @@
  */
 
 import type { Character, WorldSetting } from '../../config/types'
-import { parseMarkdownFields, cleanMarkdown, extractNameFromText } from './markdownParser'
+import { parseMarkdownFields, cleanMarkdown } from './markdownParser'
 
 // ==================== P0: isTitleLine 改进版 ====================
 // 此段吸收自 F:\1\old OneClickDerivation.tsx isTitleLine
@@ -345,98 +345,155 @@ export function extractProtagonistName(text: string): string {
 
 /**
  * 从配角文本块中按 markdown 格式解析出各配角
- * 按 **姓名** 或 **数字. 名字** 分割，每个配角块使用 parseMarkdownFields 提取字段
+ * 支持多种分割策略：markdown **名字** / 数字序号 1. 2. / 空行分隔
  */
 export function parseSupportingChars(text: string, now: number, defaultGender?: string): Character[] {
-  if (!text.trim()) return []
+  if (!text.trim()) return [];
 
-  const chars: Character[] = []
+  const chars: Character[] = [];
 
-  // 按角色分割：查找 **姓名** 或 **数字. 名字** 作为分隔
-  const entries = text.split(/\n(?=\s*\*\*(?:\d+\.\s*)?[^*]{2,10}\*\*[：:\s]*)/)
+  // 策略1: 按 markdown 格式 **名字** 或 **数字. 名字** 分割
+  // 策略2: 按数字序号 1. 2. 3. 分割
+  // 策略3: 按空行分割
 
-  for (const entry of entries) {
-    const trimmed = entry.trim()
-    if (!trimmed) continue
+  let entries: string[] = [];
 
-    const fields = parseMarkdownFields(trimmed)
+  // 尝试策略1: markdown 格式
+  const mdSplit = text.split(/\n(?=\s*\*\*(?:\d+\.\s*)?[^*]+\*\*(?:[：:\s]|$))/);
+  if (mdSplit.length > 1) {
+    entries = mdSplit;
+  }
+  // 尝试策略2: 数字序号格式
+  else if (text.match(/^\s*\d+[\.、．]\s*/m)) {
+    entries = text.split(/\n(?=\s*\d+[\.、．]\s+)/).filter(Boolean);
+  }
+  // 策略3: 按空行分割
+  else {
+    entries = text.split(/\n\s*\n/).filter(Boolean);
+  }
 
-    // 提取姓名
-    const name = extractNameFromText(trimmed)
-    if (!name || name === '未命名') continue
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i].trim();
+    if (!entry) continue;
 
-    // 提取性别
-    let gender = ''
-    const genderText = fields['性别'] || ''
-    if (genderText.includes('男')) gender = '男'
-    else if (genderText.includes('女')) gender = '女'
-    if (!gender && defaultGender) gender = defaultGender
+    // 提取姓名（多种策略）
+    let name = '';
 
-    // 提取年龄
-    let age = ''
-    const ageMatch = (fields['年龄'] || trimmed).match(/(\d{1,3})\s*岁/)
-    if (ageMatch) age = ageMatch[1] + '岁'
+    // 策略A: **名字** 格式
+    const mdNameMatch = entry.match(/^\s*\*\*(?:\d+\.\s*)?([^*]+?)\*\*/);
+    if (mdNameMatch) {
+      name = cleanMarkdown(mdNameMatch[1]).trim();
+    }
 
-    // 提取外貌
+    // 策略B: 数字. 名字 格式（修复：排除 markdown 标题符号 ###）
+    if (!name) {
+      const numNameMatch = entry.match(/^\s*\d+[\.、．]\s*([^\n#：:\-——]{2,10})/);
+      if (numNameMatch) {
+        name = numNameMatch[1].trim().replace(/^#+\s*/, '').trim();
+      }
+    }
+
+    // 策略B-2: 数字. ### 名字（配角） 格式
+    if (!name) {
+      const hashNameMatch = entry.match(/^\s*\d+[\.、．]\s*#{1,4}\s*([^\n（(]{2,10})/);
+      if (hashNameMatch) {
+        name = hashNameMatch[1].trim();
+      }
+    }
+
+    // 策略C: 行首短名（过滤掉 markdown 标题和纯符号）
+    if (!name) {
+      const firstLine = entry.split('\n')[0].trim();
+      const clean = cleanMarkdown(firstLine)
+        .replace(/^#+\s*/, '')        // 去掉开头的 #
+        .replace(/^\d+[\.、．]\s*/, '') // 去掉数字序号
+        .replace(/[（(].*?[)）]/, '')  // 去掉括号备注
+        .trim();
+      const words = clean.split(/[，,、\s]/).filter(w => w.length >= 2 && w.length <= 6 && !/^#+$/.test(w));
+      name = words[0] || '';
+    }
+
+    if (!name || name.length < 2 || name.length > 10 || /^#+$/.test(name)) continue;
+
+    // 提取字段（使用 parseMarkdownFields + 正则回退）
+    const fields = parseMarkdownFields(entry);
+
+    // 性别
+    let gender = '';
+    const genderText = fields['性别'] || '';
+    if (genderText.includes('男')) gender = '男';
+    else if (genderText.includes('女')) gender = '女';
+    if (!gender && defaultGender) gender = defaultGender;
+
+    // 年龄
+    let age = '';
+    const ageMatch = (fields['年龄'] || entry).match(/(\d{1,3})\s*岁/);
+    if (ageMatch) age = ageMatch[1] + '岁';
+
+    // 外貌（支持多种字段名）
     const appearance = cleanMarkdown(
-      fields['外貌'] || fields['外貌特征'] || ''
-    )
+      fields['外貌'] || fields['外貌特征'] || fields['形象'] || fields['长相'] || ''
+    );
 
-    // 提取性格
+    // 性格（支持多种字段名）
     const personalityText = cleanMarkdown(
-      fields['性格'] || fields['性格特点'] || fields['性格核心'] || ''
-    )
+      fields['性格'] || fields['性格特点'] || fields['性格核心'] || fields['个性'] || ''
+    );
     const personality = personalityText
       .split(/[,，、;；]/)
       .map(s => s.trim())
-      .filter(s => s.length >= 2 && s.length <= 20)
+      .filter(s => s.length >= 2 && s.length <= 20);
 
-    // 提取背景
+    // 背景（支持多种字段名）
     const background = cleanMarkdown(
-      fields['背景'] || fields['背景经历'] || ''
-    )
+      fields['背景'] || fields['背景经历'] || fields['身世'] || fields['经历'] || ''
+    );
 
-    // 提取与主角关系
-    const relationships: Character['relationships'] = []
+    // 能力/特长（修复：此前永远为空字符串）
+    const abilities = cleanMarkdown(
+      fields['能力'] || fields['特长'] || fields['技能'] || fields['异能'] || fields['法术'] || ''
+    );
+
+    // 目标/人物弧线（修复：此前永远为空字符串）
+    const arc = cleanMarkdown(
+      fields['目标'] || fields['核心动机'] || fields['动机'] || fields['人物弧线'] || fields['弧线'] || fields['追求'] || ''
+    );
+
+    // 关系
+    const relationships: Character['relationships'] = [];
     const relText = cleanMarkdown(
-      fields['与主角关系'] || fields['关系'] || ''
-    )
+      fields['与主角关系'] || fields['关系'] || fields['人物关系'] || ''
+    );
     if (relText) {
       relationships.push({
         targetId: '',
         targetName: '主角',
         type: relText,
         description: '',
-      })
-    }
-
-    // 推断角色类型
-    let roleType: Character['roleType'] = 'supporting'
-    if (/反派|对手|敌|仇|恶|boss/i.test(trimmed)) {
-      roleType = 'antagonist'
+      });
     }
 
     chars.push({
-      id: `sup_${now}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `sup_${now}_${i}_${Math.random().toString(36).slice(2, 4)}`,
       name,
-      roleType,
+      roleType: 'supporting',
       avatar: '',
       basicInfo: { age, gender, occupation: '' },
       appearance,
       personality,
       background,
-      abilities: '',
+      abilities,
       relationships,
       voice: '',
       innerWorld: '',
-      arc: '',
+      arc,
       tags: [],
       createdAt: now,
       updatedAt: now,
-    })
+    });
   }
 
-  return chars
+  return chars;
 }
 
 // ==================== P0: parseWorldview ====================
