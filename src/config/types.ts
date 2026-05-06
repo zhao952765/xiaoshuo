@@ -1,9 +1,56 @@
 /**
  * ==========================================
  * 全局类型定义 - Private Novel Studio Pro
- * 统一整合版 SRS v2.3 兼容
+ * 统一数据结构版本
  * ==========================================
  */
+
+// ==========================================
+// 基础响应类型
+// ==========================================
+
+/** AI 响应统一格式 */
+export interface AIResponse<T = any> {
+  success: boolean;
+  data?: T;
+  error?: string;
+}
+
+/** AI 请求参数 */
+export interface AIRequest {
+  prompt: string;
+  model?: string;
+  temperature?: number;
+}
+
+// ==========================================
+// 消息与结果类型
+// ==========================================
+
+/** 对话消息 */
+export interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: number;
+}
+
+/** 写作结果 */
+export interface WritingResult {
+  id: string;
+  content: string;
+  createdAt: number;
+}
+
+// ==========================================
+// 应用状态
+// ==========================================
+
+/** 应用全局状态 */
+export interface AppState {
+  loading: boolean;
+  error?: string;
+}
 
 // ==========================================
 // 基础联合类型
