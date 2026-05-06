@@ -1,95 +1,100 @@
-import { Link, useLocation } from 'react-router-dom'
+/**
+ * 侧边栏导航 - SRS v2.3 完整版
+ * 12个模块入口 + 项目状态指示
+ */
 
-const menuItems = [
-  { path: '/', label: '项目总览', icon: '📊' },
-  { path: '/deduce', label: '一键推导', icon: '⚡' },
-  { path: '/longplan', label: '长篇规划', icon: '📝' },
-  { path: '/continue', label: '自动续写', icon: '✍️' },
-  { path: '/polish', label: '文本润色', icon: '🎨' },
-  { path: '/character', label: '角色管理', icon: '👤' },
-  { path: '/world', label: '世界观管理', icon: '🌍' },
-  { path: '/plotview', label: '剧情观可视化', icon: '🕸️' },
-  { path: '/tags', label: '智能标签', icon: '🏷️' },
-  { path: '/memory', label: '本地记忆', icon: '🧠' },
-  { path: '/aimodel', label: 'AI 模型中心', icon: '🤖' },
-  { path: '/chat', label: 'AI 对话助手', icon: '💬' },
-  { path: '/logs', label: '日志中心', icon: '📋' },
-]
+import React from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { useStore } from '../store'
+import { NAV_ITEMS } from '../routes'
 
 export default function Sidebar() {
   const location = useLocation()
+  const navigate = useNavigate()
+  const currentNovel = useStore((s) => s.currentNovel)
+  const adultMode = useStore((s) => s.adultMode)
+  const isLoading = useStore((s) => s.isLoading)
 
   return (
-    <aside style={{
-      width: '220px',
+    <div style={{
+      width: 200,
       height: '100vh',
-      background: '#141414',
-      borderRight: '1px solid #2a2a2a',
+      background: '#0a0a0a',
+      borderRight: '1px solid #1a1a1a',
       display: 'flex',
       flexDirection: 'column',
-      flexShrink: 0
+      flexShrink: 0,
     }}>
-      <div style={{ padding: '16px', borderBottom: '1px solid #2a2a2a' }}>
-        <h1 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold', color: '#6366f1' }}>PNS Pro</h1>
+      {/* Logo */}
+      <div style={{ padding: '16px 20px', borderBottom: '1px solid #1a1a1a' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: '#e0e0e0' }}>
+          📘 情色推导器
+        </div>
+        <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+          v2.3 {adultMode && <span style={{ color: '#a855f7' }}>🔞 成人模式</span>}
+        </div>
       </div>
 
-      <nav style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
-        {menuItems.map((item) => {
+      {/* 项目状态 */}
+      {currentNovel && (
+        <div style={{
+          padding: '10px 16px',
+          background: 'rgba(139,92,246,0.08)',
+          borderBottom: '1px solid #1a1a1a',
+        }}>
+          <div style={{ fontSize: 12, color: '#a78bfa', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            📖 {currentNovel.title}
+          </div>
+        </div>
+      )}
+
+      {/* 导航菜单 */}
+      <div style={{ flex: 1, overflow: 'auto', padding: '8px 0' }}>
+        {NAV_ITEMS.map((item) => {
           const isActive = location.pathname === item.path
+          const isCore = ['/', '/deduce', '/plot', '/write'].includes(item.path)
+
           return (
-            <Link
+            <button
               key={item.path}
-              to={item.path}
+              onClick={() => navigate(item.path)}
               style={{
+                width: '100%',
+                padding: '10px 16px',
                 display: 'flex',
                 alignItems: 'center',
-                padding: '10px 16px',
-                margin: '2px 8px',
-                borderRadius: '8px',
-                textDecoration: 'none',
-                fontSize: '14px',
-                transition: 'all 0.2s',
-                background: isActive ? 'rgba(99,102,241,0.15)' : 'transparent',
-                color: isActive ? '#6366f1' : '#a0a0a0',
-                border: isActive ? '1px solid rgba(99,102,241,0.3)' : '1px solid transparent'
-              }}
-              onMouseEnter={(e) => {
-                if (!isActive) {
-                  e.currentTarget.style.background = '#1f1f1f'
-                  e.currentTarget.style.color = '#e0e0e0'
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!isActive) {
-                  e.currentTarget.style.background = 'transparent'
-                  e.currentTarget.style.color = '#a0a0a0'
-                }
+                gap: 10,
+                background: isActive ? 'rgba(139,92,246,0.12)' : 'transparent',
+                color: isActive ? '#a78bfa' : isCore ? '#d1d5db' : '#6b7280',
+                border: 'none',
+                borderLeft: isActive ? '3px solid #8b5cf6' : '3px solid transparent',
+                cursor: 'pointer',
+                fontSize: 13,
+                fontWeight: isActive || isCore ? 500 : 400,
+                textAlign: 'left',
+                transition: 'all 0.15s',
               }}
             >
-              <span style={{ marginRight: '10px', fontSize: '16px' }}>{item.icon}</span>
+              <span style={{ width: 20, textAlign: 'center', fontSize: 15 }}>{item.icon}</span>
               <span>{item.label}</span>
-            </Link>
+              {item.path === '/deduce' && isLoading && (
+                <span style={{ marginLeft: 'auto', fontSize: 10, color: '#f59e0b' }}>⏳</span>
+              )}
+            </button>
           )
         })}
-      </nav>
-
-      <div style={{ padding: '12px', borderTop: '1px solid #2a2a2a' }}>
-        <Link
-          to="/settings"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            padding: '10px 16px',
-            borderRadius: '8px',
-            textDecoration: 'none',
-            fontSize: '14px',
-            color: '#a0a0a0'
-          }}
-        >
-          <span style={{ marginRight: '10px' }}>⚙️</span>
-          <span>设置中心</span>
-        </Link>
       </div>
-    </aside>
+
+      {/* 底部状态 */}
+      <div style={{
+        padding: '12px 16px',
+        borderTop: '1px solid #1a1a1a',
+        fontSize: 11,
+        color: '#4b5563',
+      }}>
+        <div>完全本地运行</div>
+        <div style={{ marginTop: 2 }}>数据存储于本地</div>
+      </div>
+    </div>
   )
 }

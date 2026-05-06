@@ -14,8 +14,11 @@ import type {
   Volume,
   PolishResult,
   Conversation,
+  EmotionArc,
+  LustArc,
+  OutlineNode,
 } from '../../config/types'
-import { transformDeduceToAppData } from '../../renderer/utils/deduceTransformer'
+import { transformDeduceToAppData, emotionArcToEvents } from '../../renderer/utils/deduceTransformer'
 
 interface StoreState {
   // ========== 核心数据 ==========
@@ -32,9 +35,12 @@ interface StoreState {
   logs: Log[]
   conversations: Conversation[]
 
-  // ========== 推导结果衍生数据 ==========
-  emotionEvents: Array<{ id: string; title: string; description: string; type: 'emotion' | 'adult' | 'conflict' | 'climax'; characterIds: string[]; order: number }>
-  outlineNodes: Array<{ id: string; title: string; content: string; order: number }>
+  // ========== SRS v2.3: 感情线 & 肉欲线（独立状态，与 novel 关联）==========
+  emotionArc: EmotionArc | null
+  lustArc: LustArc | null
+
+  // ========== 兼容旧版：大纲节点 ==========
+  outlineNodes: OutlineNode[]
 
   // ========== 推导任务状态（跨页面持久） ==========
   deduceTask: {
@@ -131,6 +137,12 @@ interface StoreActions {
   removeConversation: (id: string) => void
   clearConversations: () => void
 
+  // ========== SRS v2.3: 感情线 & 肉欲线 CRUD ==========
+  setEmotionArc: (arc: EmotionArc | null) => void
+  updateEmotionArc: (partial: Partial<EmotionArc>) => void
+  setLustArc: (arc: LustArc | null) => void
+  updateLustArc: (partial: Partial<LustArc>) => void
+
   // ========== 全局状态 ==========
   setLoading: (loading: boolean) => void
   toggleAdultMode: () => void
@@ -143,7 +155,7 @@ interface StoreActions {
   setDefaultMaxTokens: (tokens: number) => void
   setApiTimeout: (timeout: number) => void
 
-  // ========== 推导任务管理 ==========
+  // ========== 推导任务管理（跨页面持久） ==========
   startDeduceTask: (params: { theme: string; maleCount: number; femaleCount: number; targetLength: string }) => void
   completeDeduceTask: (result: any) => void
   failDeduceTask: (error: string) => void
@@ -154,15 +166,14 @@ interface StoreActions {
   importFromLongPlan: (volumes: Volume[], chapters: Chapter[]) => void
   applyPolishResult: (chapterId: string, result: PolishResult) => void
 
-  exportProject: () => Record<string, unknown>
-  loadProject: (data: Record<string, unknown>) => void
+  exportProject: () => Record<string, any>
+  loadProject: (data: Record<string, any>) => void
   resetAll: () => void
   clearAllData: () => void
   setLastDeduceResult: (result: OneClickResult | null) => void
 
-  // ========== 推导结果更新 ==========
-  updateEmotionEvents: (events: Array<{ id: string; title: string; description: string; type: 'emotion' | 'adult' | 'conflict' | 'climax'; characterIds: string[]; order: number }>) => void
-  updateOutlineNodes: (nodes: Array<{ id: string; title: string; content: string; order: number }>) => void
+  // ========== 兼容旧版：大纲节点更新 ==========
+  updateOutlineNodes: (nodes: OutlineNode[]) => void
 }
 
 const genId = (): string =>
@@ -184,7 +195,8 @@ const initialState: StoreState = {
   isLoading: false,
   adultMode: false,
   selectedTagIds: [],
-  emotionEvents: [],
+  emotionArc: null,
+  lustArc: null,
   outlineNodes: [],
   deduceTask: null,
   fontSize: 'medium',
@@ -493,6 +505,22 @@ export const useAppStore = create<StoreState & StoreActions>()(
         })),
       clearConversations: () => set({ conversations: [] }),
 
+      // ----- SRS v2.3: 感情线 & 肉欲线 -----
+      setEmotionArc: (arc) => set({ emotionArc: arc }),
+      updateEmotionArc: (partial) =>
+        set((state) => ({
+          emotionArc: state.emotionArc
+            ? { ...state.emotionArc, ...partial, updatedAt: Date.now() }
+            : null,
+        })),
+      setLustArc: (arc) => set({ lustArc: arc }),
+      updateLustArc: (partial) =>
+        set((state) => ({
+          lustArc: state.lustArc
+            ? { ...state.lustArc, ...partial, updatedAt: Date.now() }
+            : null,
+        })),
+
       // ----- 全局状态 -----
       setLoading: (loading) => set({ isLoading: loading }),
       toggleAdultMode: () =>
@@ -530,28 +558,31 @@ export const useAppStore = create<StoreState & StoreActions>()(
       })),
       clearDeduceTask: () => set({ deduceTask: null }),
 
-      // ----- 一键推导结果导入（使用统一转换层） -----
+      // ----- 一键推导结果导入（SRS v2.3 修复） -----
       importFromDeduce: (result, firstChapterContent?: string) =>
         set((state) => {
-          // 修复：首章内容优先级：显式传入 > result.firstChapter > 空
-          // 确保首章内容正确写入第一章（transformDeduceToAppData 会将其写入 chapters[0].content）
           const mergedFirstChapter = firstChapterContent || result.firstChapter || ''
+          const novelId = genId()
+
           const appData = transformDeduceToAppData(result, {
             firstChapterContent: mergedFirstChapter,
             adultMode: state.deduceTask?.adultMode ?? state.adultMode,
+            novelId,
           })
 
           const novel: Novel = {
-            id: genId(),
+            id: novelId,
             title: result.title || '未命名项目',
             summary: result.summary || '',
             adultMode: state.deduceTask?.adultMode ?? state.adultMode,
-            tags: [],
+            tags: appData.tags.map(t => t.id),
             targetWords: '30000',
             characters: appData.charIds,
             worldSettings: [appData.worldSetting.id],
             chapters: appData.chapters.map((c: Chapter) => c.id),
             plotLines: [appData.plotLine.id],
+            emotionArcId: appData.emotionArc.id,
+            lustArcId: appData.lustArc.id,
             createdAt: Date.now(),
             updatedAt: Date.now(),
           }
@@ -563,9 +594,10 @@ export const useAppStore = create<StoreState & StoreActions>()(
             plotLines: [appData.plotLine],
             chapters: appData.chapters,
             volumes: [],
-            emotionEvents: appData.emotionEvents,
+            emotionArc: appData.emotionArc,
+            lustArc: appData.lustArc,
             outlineNodes: appData.outlineNodes,
-            tags: state.tags,
+            tags: [...state.tags, ...appData.tags],
             memories: state.memories,
             aiModels: state.aiModels,
             currentModel: state.currentModel,
@@ -575,7 +607,7 @@ export const useAppStore = create<StoreState & StoreActions>()(
                 id: genId(),
                 type: 'success' as const,
                 message: `一键推导完成：${novel.title}`,
-                detail: `生成 ${appData.characters.length} 个角色，${appData.chapters.length} 个章节`,
+                detail: `生成 ${appData.characters.length} 个角色，${appData.chapters.length} 个章节，感情线节点 ${appData.emotionArc.nodes.length} 个，肉欲线强度点 ${appData.lustArc.intensityCurve.length} 个`,
                 timestamp: Date.now(),
               },
               ...state.logs,
@@ -590,13 +622,13 @@ export const useAppStore = create<StoreState & StoreActions>()(
           chapters: [...state.chapters, ...chapters],
           currentNovel: state.currentNovel
             ? {
-                ...state.currentNovel,
-                chapters: [
-                  ...state.currentNovel.chapters,
-                  ...chapters.map((c) => c.id),
-                ],
-                updatedAt: Date.now(),
-              }
+              ...state.currentNovel,
+              chapters: [
+                ...state.currentNovel.chapters,
+                ...chapters.map((c) => c.id),
+              ],
+              updatedAt: Date.now(),
+            }
             : null,
         })),
 
@@ -606,20 +638,20 @@ export const useAppStore = create<StoreState & StoreActions>()(
           chapters: state.chapters.map((c) =>
             c.id === chapterId
               ? {
-                  ...c,
-                  content: result.polished,
-                  status: 'polished' as const,
-                  updatedAt: Date.now(),
-                }
+                ...c,
+                content: result.polished,
+                status: 'polished' as const,
+                updatedAt: Date.now(),
+              }
               : c
           ),
         })),
 
-      // ----- 项目导出 -----
+      // ----- 项目导出（SRS v2.3 修复：包含 emotionArc / lustArc）-----
       exportProject: () => {
         const state = get()
         return {
-          version: '1.0.0',
+          version: '2.3.0',
           exportedAt: Date.now(),
           currentNovel: state.currentNovel,
           characters: state.characters,
@@ -627,6 +659,9 @@ export const useAppStore = create<StoreState & StoreActions>()(
           chapters: state.chapters,
           volumes: state.volumes,
           plotLines: state.plotLines,
+          emotionArc: state.emotionArc,
+          lustArc: state.lustArc,
+          outlineNodes: state.outlineNodes,
           tags: state.tags,
           aiModels: state.aiModels,
           currentModelId: state.currentModel?.id ?? null,
@@ -635,16 +670,13 @@ export const useAppStore = create<StoreState & StoreActions>()(
         }
       },
 
-      // ----- 项目加载 -----
+      // ----- 项目加载（SRS v2.3 修复：加载 emotionArc / lustArc）-----
       loadProject: (data) => {
         if (!data || typeof data !== 'object') return
-        const d = data as Record<string, unknown>
+        const d = data as Record<string, any>
 
-        // 兼容旧数据：emotionEvents/outlineNodes 已迁移到 store 根状态
         const novel = (d.currentNovel as unknown as Novel | null) ?? null
-
         const currentModelId = d.currentModelId as string | null
-
         const loadedModels = (d.aiModels as AIModel[] | undefined) ?? []
         const loadedCurrentModel = currentModelId
           ? loadedModels.find((m) => m.id === currentModelId) ?? null
@@ -653,8 +685,7 @@ export const useAppStore = create<StoreState & StoreActions>()(
         set({
           currentNovel: novel as Novel | null,
           characters: (d.characters as Character[] | undefined) ?? [],
-          worldSettings:
-            (d.worldSettings as WorldSetting[] | undefined) ?? [],
+          worldSettings: (d.worldSettings as WorldSetting[] | undefined) ?? [],
           chapters: (d.chapters as Chapter[] | undefined) ?? [],
           volumes: (d.volumes as Volume[] | undefined) ?? [],
           plotLines: (d.plotLines as PlotLine[] | undefined) ?? [],
@@ -663,13 +694,13 @@ export const useAppStore = create<StoreState & StoreActions>()(
           currentModel: loadedCurrentModel ?? loadedModels[0] ?? null,
           adultMode: (d.adultMode as boolean | undefined) ?? false,
           conversations: (d.conversations as Conversation[] | undefined) ?? [],
-          emotionEvents: (d as any).emotionEvents || [],
-          outlineNodes: (d as any).outlineNodes || [],
+          emotionArc: (d.emotionArc as EmotionArc | undefined) ?? null,
+          lustArc: (d.lustArc as LustArc | undefined) ?? null,
+          outlineNodes: (d.outlineNodes as OutlineNode[] | undefined) ?? [],
         })
       },
 
-      // ----- 更新推导结果 -----
-      updateEmotionEvents: (events) => set({ emotionEvents: events }),
+      // ----- 更新大纲节点 -----
       updateOutlineNodes: (nodes) => set({ outlineNodes: nodes }),
 
       // ----- 重置全部 -----
@@ -693,11 +724,11 @@ export const useAppStore = create<StoreState & StoreActions>()(
           conversations: [],
           isLoading: false,
           selectedTagIds: [],
-          emotionEvents: [],
+          emotionArc: null,
+          lustArc: null,
           outlineNodes: [],
           deduceTask: null,
           lastDeduceResult: null,
-          // 保留 AI 模型和应用设置
           aiModels: state.aiModels,
           currentModel: state.currentModel,
           fontSize: state.fontSize,
@@ -725,7 +756,8 @@ export const useAppStore = create<StoreState & StoreActions>()(
         currentModel: state.currentModel,
         adultMode: state.adultMode,
         conversations: state.conversations,
-        emotionEvents: state.emotionEvents,
+        emotionArc: state.emotionArc,
+        lustArc: state.lustArc,
         outlineNodes: state.outlineNodes,
         selectedTagIds: state.selectedTagIds,
         fontSize: state.fontSize,

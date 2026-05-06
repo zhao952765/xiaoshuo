@@ -1,970 +1,642 @@
-import { useState, useCallback, useEffect } from 'react'
-import PageWrapper from '../../components/PageWrapper'
-import { useStore } from '../../store'
-import { ReactFlow, Background, Controls, MiniMap, addEdge, useNodesState, useEdgesState } from '@xyflow/react'
-import '@xyflow/react/dist/style.css'
+/**
+ * 剧情可视化 / 编辑中心
+ * SRS v2.3 统一整合版修复
+ *
+ * Tab 结构（9大模块对应）：
+ * 1. 故事梗概
+ * 2. 角色档案（NSFW卡）
+ * 3. 世界观
+ * 4. 感情线（React Flow 双轨）
+ * 5. 肉欲线（强度曲线）
+ * 6. 剧情大纲
+ * 7. 章节目录
+ * 8. 关系图谱（React Flow）
+ * 9. 标签管理
+ */
 
-const tabs = [
-  { key: 'summary', label: '故事梗概' },
-  { key: 'characters', label: '角色档案' },
-  { key: 'world', label: '世界观' },
-  { key: 'emotion', label: '感情线' },
-  { key: 'outline', label: '剧情大纲' },
-  { key: 'chapters', label: '章节目录' },
-  { key: 'graph', label: '关系图谱' },
+import React, { useState, useCallback, useMemo } from 'react'
+import ReactFlow, {
+  Background,
+  Controls,
+  MiniMap,
+  useNodesState,
+  useEdgesState,
+  Node,
+  Edge,
+  ReactFlowProvider,
+} from 'reactflow'
+import 'reactflow/dist/style.css'
+import { useStore } from '../../store'
+import type { EmotionArcNode, EmotionArcEdge, LustIntensityPoint, LustClimaxPoint } from '../../../config/types'
+
+// ==================== Tab 定义 ====================
+type PlotTab =
+  | 'overview'
+  | 'characters'
+  | 'world'
+  | 'emotion'
+  | 'lust'
+  | 'outline'
+  | 'chapters'
+  | 'relations'
+  | 'tags'
+
+const TABS: { key: PlotTab; label: string; icon: string }[] = [
+  { key: 'overview', label: '故事梗概', icon: '📖' },
+  { key: 'characters', label: '角色档案', icon: '👤' },
+  { key: 'world', label: '世界观', icon: '🌍' },
+  { key: 'emotion', label: '感情线', icon: '💕' },
+  { key: 'lust', label: '肉欲线', icon: '🔥' },
+  { key: 'outline', label: '剧情大纲', icon: '📋' },
+  { key: 'chapters', label: '章节目录', icon: '📑' },
+  { key: 'relations', label: '关系图谱', icon: '🕸️' },
+  { key: 'tags', label: '标签管理', icon: '🏷️' },
 ]
 
+// ==================== 颜色配置 ====================
+const ROLE_COLORS: Record<string, string> = {
+  protagonist: '#8b5cf6', // 紫
+  supporting: '#ec4899', // 粉
+  antagonist: '#ef4444', // 红
+  minor: '#6b7280', // 灰
+}
+
+const EMOTION_COLORS: Record<string, string> = {
+  emotion: '#ec4899',
+  conflict: '#f59e0b',
+  climax: '#ef4444',
+  adult: '#a855f7',
+}
+
+// ==================== 主组件 ====================
 export default function PlotView() {
-  const [activeTab, setActiveTab] = useState('summary')
-  const novel = useStore((s) => s.currentNovel)
+  const [activeTab, setActiveTab] = useState<PlotTab>('overview')
+
+  // 从 Store 读取所有相关数据
+  const currentNovel = useStore((s) => s.currentNovel)
   const characters = useStore((s) => s.characters)
+  const worldSettings = useStore((s) => s.worldSettings)
   const chapters = useStore((s) => s.chapters)
-  const worlds = useStore((s) => s.worldSettings)
+  const plotLines = useStore((s) => s.plotLines)
+  const tags = useStore((s) => s.tags)
+  const emotionArc = useStore((s) => s.emotionArc)
+  const lustArc = useStore((s) => s.lustArc)
+  const outlineNodes = useStore((s) => s.outlineNodes)
   const updateNovel = useStore((s) => s.updateNovel)
-  const updateEmotionEvents = useStore((s) => s.updateEmotionEvents)
+  const updateCharacter = useStore((s) => s.updateCharacter)
+  const updateWorldSetting = useStore((s) => s.updateWorldSetting)
   const updateOutlineNodes = useStore((s) => s.updateOutlineNodes)
-  const adultMode = useStore((s) => s.adultMode)
+  const updateEmotionArc = useStore((s) => s.updateEmotionArc)
+  const updateLustArc = useStore((s) => s.updateLustArc)
 
-  // 从根状态读取，不依赖 novel 嵌套字段
-  const storeEmotionEvents = useStore((s) => s.emotionEvents || [])
-  const storeOutlineNodes = useStore((s) => s.outlineNodes || [])
+  // 本地编辑状态
+  const [editTitle, setEditTitle] = useState(currentNovel?.title || '')
+  const [editSummary, setEditSummary] = useState(currentNovel?.summary || '')
 
-  const [editTitle, setEditTitle] = useState(novel?.title || '')
-  const [editSummary, setEditSummary] = useState(novel?.summary || '')
+  // ==================== 感情线 React Flow ====================
+  const emotionFlowNodes = useMemo<Node[]>(() => {
+    if (!emotionArc) return []
+    return emotionArc.nodes.map((n: EmotionArcNode) => ({
+      id: n.id,
+      type: 'default',
+      position: n.position,
+      data: { label: n.data.label },
+      style: {
+        background: n.data.color,
+        color: '#fff',
+        border: '2px solid #fff',
+        borderRadius: '8px',
+        padding: '10px 14px',
+        fontSize: '12px',
+        fontWeight: 600,
+        width: 140,
+      },
+    }))
+  }, [emotionArc])
 
-  // ========== 剧情大纲状态 ==========
-  const [outlineNodes, setOutlineNodes] = useState<Array<{ id: string; title: string; content: string; order: number }>>(
-    storeOutlineNodes || []
-  )
+  const emotionFlowEdges = useMemo<Edge[]>(() => {
+    if (!emotionArc) return []
+    return emotionArc.edges.map((e: EmotionArcEdge) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      type: e.type,
+      label: e.label,
+      animated: e.animated,
+      style: e.style,
+    }))
+  }, [emotionArc])
 
-  // ========== 感情线状态 ==========
-  const [emotionEvents, setEmotionEvents] = useState<Array<{
-    id: string
-    title: string
-    description: string
-    type: 'emotion' | 'adult' | 'conflict' | 'climax'
-    characterIds: string[]
-    order: number
-  }>>(storeEmotionEvents || [])
+  const [efNodes, setEfNodes, onEfNodesChange] = useNodesState(emotionFlowNodes)
+  const [efEdges, setEfEdges, onEfEdgesChange] = useEdgesState(emotionFlowEdges)
 
-  // 感情线类型筛选
-  const [emotionFilter, setEmotionFilter] = useState<'all' | 'emotion' | 'conflict' | 'climax' | 'adult'>('all')
+  React.useEffect(() => {
+    setEfNodes(emotionFlowNodes)
+    setEfEdges(emotionFlowEdges)
+  }, [emotionFlowNodes, emotionFlowEdges, setEfNodes, setEfEdges])
 
-  const emotionTypeConfig: Record<string, { label: string; color: string; icon: string }> = {
-    emotion:  { label: '感情', color: '#ec4899', icon: '💕' },
-    adult:    { label: '肉欲', color: '#f43f5e', icon: '🔥' },
-    conflict: { label: '冲突', color: '#f59e0b', icon: '⚡' },
-    climax:   { label: '高潮', color: '#a855f7', icon: '⭐' },
-  }
+  // ==================== 关系图谱 React Flow ====================
+  const relationNodes = useMemo<Node[]>(() => {
+    return characters.map((char, idx) => ({
+      id: char.id,
+      type: 'default',
+      position: { x: 100 + (idx % 4) * 200, y: 100 + Math.floor(idx / 4) * 150 },
+      data: { label: char.name },
+      style: {
+        background: ROLE_COLORS[char.roleType] || '#6b7280',
+        color: '#fff',
+        border: '2px solid #fff',
+        borderRadius: '50%',
+        width: 80,
+        height: 80,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: '12px',
+        fontWeight: 600,
+      },
+    }))
+  }, [characters])
 
-  // 过滤后的感情线事件（按筛选类型 + adultMode 联动）
-  const filteredEmotionEvents = emotionEvents.filter((e) => {
-    // 非成人模式下隐藏 adult 类型
-    if (!adultMode && e.type === 'adult') return false
-    // 按筛选类型过滤
-    if (emotionFilter !== 'all' && e.type !== emotionFilter) return false
-    return true
-  })
+  const relationEdges = useMemo<Edge[]>(() => {
+    const edges: Edge[] = []
+    characters.forEach((char) => {
+      char.relationships.forEach((rel) => {
+        // 避免重复边
+        const edgeId = `e-${char.id}-${rel.targetId}`
+        const reverseId = `e-${rel.targetId}-${char.id}`
+        if (edges.some((e) => e.id === reverseId)) return
+        edges.push({
+          id: edgeId,
+          source: char.id,
+          target: rel.targetId,
+          label: rel.type,
+          animated: rel.type === '恋人' || rel.type === '对立',
+          style: {
+            stroke: rel.type === '对立' ? '#ef4444' : rel.type === '恋人' ? '#ec4899' : '#9ca3af',
+            strokeWidth: 2,
+          },
+        })
+      })
+    })
+    return edges
+  }, [characters])
 
-  // 只在 novel 对象变化时（推导完成/切换项目）同步一次数据
-  const novelId = novel?.id
-  useEffect(() => {
-    setEditTitle(novel?.title || '')
-    setEditSummary(novel?.summary || '')
-    setOutlineNodes(storeOutlineNodes || [])
-    setEmotionEvents(storeEmotionEvents || [])
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [novelId])
+  const [relNodes, setRelNodes, onRelNodesChange] = useNodesState(relationNodes)
+  const [relEdges, setRelEdges, onRelEdgesChange] = useEdgesState(relationEdges)
 
-  // 修复：大纲和感情线修改后自动同步到 store，避免切页丢失
-  useEffect(() => {
-    updateOutlineNodes(outlineNodes)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [outlineNodes])
+  React.useEffect(() => {
+    setRelNodes(relationNodes)
+    setRelEdges(relationEdges)
+  }, [relationNodes, relationEdges, setRelNodes, setRelEdges])
 
-  useEffect(() => {
-    updateEmotionEvents(emotionEvents)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [emotionEvents])
-
-  const saveSummary = () => {
+  // ==================== 保存梗概 ====================
+  const handleSaveOverview = useCallback(() => {
     updateNovel({ title: editTitle, summary: editSummary })
-    updateEmotionEvents(emotionEvents)
-    updateOutlineNodes(outlineNodes)
-  }
+  }, [editTitle, editSummary, updateNovel])
 
-  // ========== 剧情大纲操作 ==========
-  const addOutlineNode = () => {
-    setOutlineNodes((prev) => [
-      ...prev,
-      { id: Date.now().toString(), title: '', content: '', order: prev.length },
-    ])
-  }
+  // ==================== 渲染各 Tab ====================
+  const renderTabContent = () => {
+    switch (activeTab) {
+      case 'overview':
+        return (
+          <div style={{ padding: '20px', maxWidth: 800 }}>
+            <h3 style={{ color: '#e0e0e0', marginBottom: 16 }}>📖 故事梗概</h3>
+            <input
+              value={editTitle}
+              onChange={(e) => setEditTitle(e.target.value)}
+              placeholder="输入小说标题..."
+              style={inputStyle}
+            />
+            <textarea
+              value={editSummary}
+              onChange={(e) => setEditSummary(e.target.value)}
+              placeholder="输入故事简介..."
+              rows={8}
+              style={{ ...inputStyle, marginTop: 12, resize: 'vertical' }}
+            />
+            <button onClick={handleSaveOverview} style={btnPrimaryStyle}>
+              保存梗概
+            </button>
+          </div>
+        )
 
-  const updateOutlineNode = (id: string, field: 'title' | 'content', value: string) => {
-    setOutlineNodes((prev) => prev.map((n) => (n.id === id ? { ...n, [field]: value } : n)))
-  }
+      case 'characters':
+        return (
+          <div style={{ padding: '20px' }}>
+            <h3 style={{ color: '#e0e0e0', marginBottom: 16 }}>👤 角色档案</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+              {characters.map((char) => (
+                <div key={char.id} style={cardStyle}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                    <div style={{
+                      width: 48, height: 48, borderRadius: '50%',
+                      background: ROLE_COLORS[char.roleType] || '#6b7280',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      color: '#fff', fontWeight: 700, fontSize: 16,
+                    }}>
+                      {char.name.slice(0, 1)}
+                    </div>
+                    <div>
+                      <div style={{ color: '#e0e0e0', fontWeight: 600, fontSize: 15 }}>{char.name}</div>
+                      <div style={{ color: '#9ca3af', fontSize: 12 }}>
+                        {char.basicInfo.gender} · {char.basicInfo.age} · {char.roleType === 'protagonist' ? '主角' : char.roleType === 'antagonist' ? '反派' : '配角'}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ color: '#9ca3af', fontSize: 13, lineHeight: 1.6 }}>
+                    <p><strong style={{ color: '#d1d5db' }}>外貌：</strong>{char.appearance || '未填写'}</p>
+                    <p><strong style={{ color: '#d1d5db' }}>性格：</strong>{char.personality.join('、') || '未填写'}</p>
+                    <p><strong style={{ color: '#d1d5db' }}>背景：</strong>{char.background || '未填写'}</p>
+                  </div>
+                  {/* SRS v2.3: NSFW 卡展示 */}
+                  {currentNovel?.adultMode && char.nsfwProfile && (
+                    <div style={{ marginTop: 12, padding: 10, background: 'rgba(168,85,247,0.1)', borderRadius: 6, border: '1px solid rgba(168,85,247,0.3)' }}>
+                      <div style={{ color: '#a855f7', fontSize: 12, fontWeight: 600, marginBottom: 6 }}>🔞 NSFW 档案</div>
+                      <div style={{ color: '#c4b5fd', fontSize: 12, lineHeight: 1.6 }}>
+                        <p>体型：{char.nsfwProfile.bodyType || '未填写'}</p>
+                        <p>敏感带：{char.nsfwProfile.sensitiveZones.join('、') || '未填写'}</p>
+                        <p>性特质：{char.nsfwProfile.sexualTraits.join('、') || '未填写'}</p>
+                        <p>经验：{char.nsfwProfile.experienceLevel || '未填写'}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {characters.length === 0 && (
+                <div style={{ color: '#6b7280', textAlign: 'center', padding: 40 }}>暂无角色数据，请先进行一键推导</div>
+              )}
+            </div>
+          </div>
+        )
 
-  const deleteOutlineNode = (id: string) => {
-    setOutlineNodes((prev) => prev.filter((n) => n.id !== id))
-  }
+      case 'world':
+        return (
+          <div style={{ padding: '20px' }}>
+            <h3 style={{ color: '#e0e0e0', marginBottom: 16 }}>🌍 世界观</h3>
+            {worldSettings.map((ws) => (
+              <div key={ws.id} style={cardStyle}>
+                <h4 style={{ color: '#e0e0e0', marginBottom: 8 }}>{ws.name}</h4>
+                <p style={{ color: '#9ca3af', fontSize: 13, marginBottom: 12 }}>{ws.overview}</p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                  <div>
+                    <h5 style={{ color: '#d1d5db', fontSize: 13, marginBottom: 6 }}>⚖️ 规则</h5>
+                    {ws.rules.map((r, i) => (
+                      <div key={i} style={{ color: '#9ca3af', fontSize: 12, marginBottom: 4 }}>• {r.name}: {r.description}</div>
+                    ))}
+                  </div>
+                  <div>
+                    <h5 style={{ color: '#d1d5db', fontSize: 13, marginBottom: 6 }}>📍 地点</h5>
+                    {ws.locations.map((l, i) => (
+                      <div key={i} style={{ color: '#9ca3af', fontSize: 12, marginBottom: 4 }}>• {l.name}: {l.description}</div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+            {worldSettings.length === 0 && (
+              <div style={{ color: '#6b7280', textAlign: 'center', padding: 40 }}>暂无世界观数据</div>
+            )}
+          </div>
+        )
 
-  const moveOutlineNode = (index: number, direction: -1 | 1) => {
-    const newIndex = index + direction
-    if (newIndex < 0 || newIndex >= outlineNodes.length) return
-    const copy = [...outlineNodes]
-    const [item] = copy.splice(index, 1)
-    copy.splice(newIndex, 0, item)
-    setOutlineNodes(copy)
-  }
+      case 'emotion':
+        return (
+          <div style={{ padding: '20px', height: 'calc(100vh - 180px)' }}>
+            <h3 style={{ color: '#e0e0e0', marginBottom: 12 }}>💕 感情线（React Flow）</h3>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              {(['emotion', 'conflict', 'climax', 'adult'] as const).map((t) => (
+                <span key={t} style={{
+                  padding: '4px 10px', borderRadius: 4, fontSize: 12, color: '#fff',
+                  background: EMOTION_COLORS[t],
+                }}>
+                  {t === 'emotion' ? '感情' : t === 'conflict' ? '冲突' : t === 'climax' ? '高潮' : '肉欲'}
+                </span>
+              ))}
+            </div>
+            {emotionArc ? (
+              <div style={{ width: '100%', height: '80%', background: '#0f0f0f', borderRadius: 8, border: '1px solid #2a2a2a' }}>
+                <ReactFlowProvider>
+                  <ReactFlow
+                    nodes={efNodes}
+                    edges={efEdges}
+                    onNodesChange={onEfNodesChange}
+                    onEdgesChange={onEfEdgesChange}
+                    fitView
+                  >
+                    <Background color="#333" gap={16} />
+                    <Controls />
+                    <MiniMap nodeColor={(n) => (n.style?.background as string) || '#666'} />
+                  </ReactFlow>
+                </ReactFlowProvider>
+              </div>
+            ) : (
+              <div style={{ color: '#6b7280', textAlign: 'center', padding: 60 }}>暂无感情线数据</div>
+            )}
+            {/* 时间轴列表（双轨展示） */}
+            {emotionArc && (
+              <div style={{ marginTop: 16 }}>
+                <h4 style={{ color: '#d1d5db', fontSize: 14, marginBottom: 8 }}>时间轴事件</h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {emotionArc.timeline.map((ev) => (
+                    <div key={ev.id} style={{
+                      padding: '10px 14px', borderRadius: 6,
+                      background: 'rgba(255,255,255,0.03)',
+                      borderLeft: `3px solid ${EMOTION_COLORS[ev.type]}`,
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ color: '#e0e0e0', fontWeight: 600, fontSize: 13 }}>{ev.title}</span>
+                        <span style={{
+                          padding: '2px 8px', borderRadius: 4, fontSize: 11, color: '#fff',
+                          background: EMOTION_COLORS[ev.type],
+                        }}>
+                          {ev.type === 'emotion' ? '感情' : ev.type === 'conflict' ? '冲突' : ev.type === 'climax' ? '高潮' : '肉欲'}
+                        </span>
+                      </div>
+                      <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 4 }}>{ev.description}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )
 
-  // ========== 关系图谱状态 ==========
-  const initialNodes = characters.map((char, i) => ({
-    id: char.id,
-    data: { label: char.name },
-    position: { x: 100 + (i % 4) * 200, y: 100 + Math.floor(i / 4) * 150 },
-    style: {
-      background: char.roleType === 'protagonist' ? 'rgba(99,102,241,0.2)' : 'rgba(168,85,247,0.15)',
-      color: '#e0e0e0',
-      border: '1px solid #333',
-      borderRadius: '10px',
-      padding: '10px 16px',
-      fontSize: '13px',
-      fontWeight: 600,
-      minWidth: '100px',
-      textAlign: 'center' as const,
-    },
-  }))
+      case 'lust':
+        return (
+          <div style={{ padding: '20px' }}>
+            <h3 style={{ color: '#e0e0e0', marginBottom: 16 }}>🔥 肉欲线（强度曲线）</h3>
+            {lustArc && lustArc.intensityCurve.length > 0 ? (
+              <>
+                {/* 强度曲线可视化 */}
+                <div style={{ marginBottom: 24, padding: 16, background: '#0f0f0f', borderRadius: 8, border: '1px solid #2a2a2a' }}>
+                  <h4 style={{ color: '#d1d5db', fontSize: 14, marginBottom: 12 }}>📈 章节强度分布</h4>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 200, paddingBottom: 30, position: 'relative' }}>
+                    {lustArc.intensityCurve.map((pt: LustIntensityPoint, idx: number) => (
+                      <div key={pt.id} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
+                        <div style={{
+                          width: '100%',
+                          height: `${pt.value * 1.8}px`,
+                          background: pt.value > 75 ? '#ef4444' : pt.value > 50 ? '#f59e0b' : '#a855f7',
+                          borderRadius: '4px 4px 0 0',
+                          opacity: 0.8,
+                          transition: 'all 0.3s',
+                        }} />
+                        <span style={{
+                          position: 'absolute', bottom: -24, left: '50%', transform: 'translateX(-50%) rotate(-45deg)',
+                          color: '#6b7280', fontSize: 10, whiteSpace: 'nowrap',
+                        }}>
+                          {pt.chapterTitle.slice(0, 6)}
+                        </span>
+                        <span style={{
+                          position: 'absolute', top: -18, left: '50%', transform: 'translateX(-50%)',
+                          color: '#d1d5db', fontSize: 10, fontWeight: 600,
+                        }}>
+                          {pt.value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
 
-  const initialEdges = (characters.flatMap((char) =>
-    (char.relationships || [])
-      .filter((rel: any) => characters.some((c) => c.id === rel.targetId))
-      .map((rel: any) => ({
-        id: `e-${char.id}-${rel.targetId}`,
-        source: char.id,
-        target: rel.targetId,
-        label: rel.type || '关系',
-        style: { stroke: '#6366f1', strokeWidth: 2 },
-        labelStyle: { fill: '#888', fontSize: 12 },
-        animated: true,
-      }))
-  ) as any[]).filter((e) => e.source !== e.target)
+                {/* 高潮点列表 */}
+                <div style={{ padding: 16, background: '#0f0f0f', borderRadius: 8, border: '1px solid #2a2a2a' }}>
+                  <h4 style={{ color: '#d1d5db', fontSize: 14, marginBottom: 12 }}>🌟 高潮点</h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {lustArc.climaxPoints.map((cp: LustClimaxPoint) => (
+                      <div key={cp.id} style={{
+                        padding: '10px 14px', borderRadius: 6,
+                        background: 'rgba(239,68,68,0.08)',
+                        borderLeft: '3px solid #ef4444',
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ color: '#e0e0e0', fontWeight: 600, fontSize: 13 }}>{cp.chapterTitle}</span>
+                          <span style={{ color: '#ef4444', fontSize: 12, fontWeight: 600 }}>强度 {cp.intensity}</span>
+                        </div>
+                        <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 4 }}>{cp.description}</p>
+                        <span style={{
+                          display: 'inline-block', marginTop: 6, padding: '2px 8px', borderRadius: 4,
+                          fontSize: 11, color: '#fca5a5', background: 'rgba(239,68,68,0.15)',
+                        }}>
+                          {cp.type === 'tease' ? '挑逗' : cp.type === 'buildup' ? '累积' : cp.type === 'climax' ? '高潮' : '余韵'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div style={{ color: '#6b7280', textAlign: 'center', padding: 60 }}>
+                {currentNovel?.adultMode
+                  ? '暂无肉欲线数据，请检查推导结果是否包含成人内容'
+                  : '当前未开启成人模式，肉欲线仅在 adultMode 下生成'}
+              </div>
+            )}
+          </div>
+        )
 
-  const [rfNodes, setRfNodes, onNodesChange] = useNodesState(initialNodes)
-  const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState(initialEdges)
+      case 'outline':
+        return (
+          <div style={{ padding: '20px' }}>
+            <h3 style={{ color: '#e0e0e0', marginBottom: 16 }}>📋 剧情大纲</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {outlineNodes.map((node, idx) => (
+                <div key={node.id} style={{
+                  padding: '12px 16px', borderRadius: 8,
+                  background: 'rgba(255,255,255,0.03)',
+                  border: '1px solid #2a2a2a',
+                }}>
+                  <div style={{ color: '#a855f7', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                    节点 {idx + 1}
+                  </div>
+                  <input
+                    value={node.title}
+                    onChange={(e) => {
+                      const updated = [...outlineNodes]
+                      updated[idx] = { ...node, title: e.target.value }
+                      updateOutlineNodes(updated)
+                    }}
+                    style={{ ...inputStyle, marginBottom: 6, fontSize: 14, fontWeight: 600 }}
+                  />
+                  <textarea
+                    value={node.content}
+                    onChange={(e) => {
+                      const updated = [...outlineNodes]
+                      updated[idx] = { ...node, content: e.target.value }
+                      updateOutlineNodes(updated)
+                    }}
+                    rows={2}
+                    style={{ ...inputStyle, fontSize: 13 }}
+                  />
+                </div>
+              ))}
+              {outlineNodes.length === 0 && (
+                <div style={{ color: '#6b7280', textAlign: 'center', padding: 40 }}>暂无大纲数据</div>
+              )}
+            </div>
+          </div>
+        )
 
-  const onConnect = useCallback(
-    (params: any) => setRfEdges((eds) => addEdge({ ...params, style: { stroke: '#6366f1', strokeWidth: 2 }, animated: true }, eds)),
-    [setRfEdges]
-  )
+      case 'chapters':
+        return (
+          <div style={{ padding: '20px' }}>
+            <h3 style={{ color: '#e0e0e0', marginBottom: 16 }}>📑 章节目录</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {chapters.sort((a, b) => a.order - b.order).map((ch) => (
+                <div key={ch.id} style={{
+                  padding: '10px 14px', borderRadius: 6,
+                  background: 'rgba(255,255,255,0.03)',
+                  border: '1px solid #2a2a2a',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                }}>
+                  <div>
+                    <span style={{ color: '#e0e0e0', fontWeight: 600, fontSize: 14 }}>{ch.title}</span>
+                    <span style={{ color: '#6b7280', fontSize: 12, marginLeft: 8 }}>
+                      {ch.status === 'draft' ? '📝 草稿' : ch.status === 'completed' ? '✅ 完成' : '✨ 已润色'}
+                    </span>
+                  </div>
+                  <span style={{ color: '#6b7280', fontSize: 12 }}>{ch.wordCount} 字</span>
+                </div>
+              ))}
+              {chapters.length === 0 && (
+                <div style={{ color: '#6b7280', textAlign: 'center', padding: 40 }}>暂无章节数据</div>
+              )}
+            </div>
+          </div>
+        )
 
-  // 只在首次加载时设置图谱节点，保留用户拖拽位置
-  useEffect(() => {
-    setRfNodes(initialNodes)
-    setRfEdges(initialEdges)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+      case 'relations':
+        return (
+          <div style={{ padding: '20px', height: 'calc(100vh - 180px)' }}>
+            <h3 style={{ color: '#e0e0e0', marginBottom: 12 }}>🕸️ 关系图谱</h3>
+            {characters.length > 0 ? (
+              <div style={{ width: '100%', height: '90%', background: '#0f0f0f', borderRadius: 8, border: '1px solid #2a2a2a' }}>
+                <ReactFlowProvider>
+                  <ReactFlow
+                    nodes={relNodes}
+                    edges={relEdges}
+                    onNodesChange={onRelNodesChange}
+                    onEdgesChange={onRelEdgesChange}
+                    fitView
+                  >
+                    <Background color="#333" gap={16} />
+                    <Controls />
+                    <MiniMap nodeColor={(n) => (n.style?.background as string) || '#666'} />
+                  </ReactFlow>
+                </ReactFlowProvider>
+              </div>
+            ) : (
+              <div style={{ color: '#6b7280', textAlign: 'center', padding: 60 }}>暂无角色关系数据</div>
+            )}
+          </div>
+        )
 
-  if (!novel) {
-    return (
-      <PageWrapper title="剧情观可视化" subtitle="请先使用一键推导生成小说数据">
-        <div style={{ textAlign: 'center', padding: '100px 0' }}>
-          <div style={{ fontSize: '64px', marginBottom: '20px' }}>📭</div>
-          <h3 style={{ color: '#888', fontSize: '18px', marginBottom: '8px' }}>暂无项目数据</h3>
-          <p style={{ color: '#666', fontSize: '14px' }}>请先使用左侧"一键推导"功能创建项目</p>
-          <button
-            onClick={() => window.location.hash = '#/deduce'}
-            style={{ marginTop: '20px', padding: '10px 24px', background: '#6366f1', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '14px', cursor: 'pointer' }}
-          >
-            去一键推导
-          </button>
-        </div>
-      </PageWrapper>
-    )
+      case 'tags':
+        return (
+          <div style={{ padding: '20px' }}>
+            <h3 style={{ color: '#e0e0e0', marginBottom: 16 }}>🏷️ 标签管理</h3>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {tags.map((tag) => (
+                <span key={tag.id} style={{
+                  padding: '6px 12px', borderRadius: 16, fontSize: 13,
+                  background: tag.color + '20',
+                  color: tag.color,
+                  border: `1px solid ${tag.color}40`,
+                }}>
+                  {tag.name}
+                </span>
+              ))}
+              {tags.length === 0 && (
+                <div style={{ color: '#6b7280', textAlign: 'center', padding: 40, width: '100%' }}>暂无标签</div>
+              )}
+            </div>
+          </div>
+        )
+
+      default:
+        return null
+    }
   }
 
   return (
-    <PageWrapper
-      title="剧情观可视化"
-      subtitle={`${novel.title} · 查看并编辑故事全貌`}
-      actions={
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button
-            onClick={() => window.location.hash = '#/deduce'}
-            style={{ padding: '8px 16px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', cursor: 'pointer' }}
-          >
-            🔄 重新推导
-          </button>
-        </div>
-      }
-    >
-      {/* 标签切换栏 */}
-      <div style={{ display: 'flex', gap: '4px', borderBottom: '1px solid #2a2a2a' }}>
-        {tabs.map((tab) => (
+    <div style={{ display: 'flex', height: '100vh', background: '#050505', color: '#e0e0e0' }}>
+      {/* 左侧 Tab 栏 */}
+      <div style={{
+        width: 180, flexShrink: 0,
+        background: '#0a0a0a', borderRight: '1px solid #1a1a1a',
+        display: 'flex', flexDirection: 'column', padding: '12px 8px',
+      }}>
+        <h2 style={{ fontSize: 14, fontWeight: 700, padding: '0 8px 12px', color: '#e0e0e0' }}>
+          📘 剧情观
+        </h2>
+        {TABS.map((tab) => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
             style={{
-              padding: '17px 24px',
-              background: activeTab === tab.key ? '#1a1a1a' : 'transparent',
-              color: activeTab === tab.key ? '#6366f1' : '#a0a0a0',
-              border: activeTab === tab.key ? '1px solid #2a2a2a' : '1px solid transparent',
-              borderBottom: activeTab === tab.key ? '2px solid #6366f1' : '2px solid transparent',
-              borderRadius: '8px 8px 0 0',
-              cursor: 'pointer',
-              fontSize: '15px',
-              fontWeight: activeTab === tab.key ? 700 : 500,
-              transition: 'all 0.2s',
-              letterSpacing: '0.5px',
+              ...tabBtnStyle,
+              background: activeTab === tab.key ? 'rgba(139,92,246,0.15)' : 'transparent',
+              color: activeTab === tab.key ? '#a78bfa' : '#9ca3af',
+              borderLeft: activeTab === tab.key ? '3px solid #8b5cf6' : '3px solid transparent',
             }}
           >
-            {tab.label}
+            <span style={{ width: 20, textAlign: 'center' }}>{tab.icon}</span>
+            <span>{tab.label}</span>
           </button>
         ))}
       </div>
 
-      {/* 内容卡片 */}
-      <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '12px', padding: '24px', minHeight: '500px' }}>
-        
-        {/* ===== 故事梗概 ===== */}
-        {activeTab === 'summary' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            <div>
-              <label style={{ display: 'block', color: '#888', fontSize: '13px', marginBottom: '8px', fontWeight: 500 }}>
-                小说标题
-              </label>
-              <input
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                placeholder="输入小说标题..."
-                style={{
-                  width: '100%',
-                  padding: '12px 16px',
-                  background: '#0f0f0f',
-                  border: '1px solid #2a2a2a',
-                  borderRadius: '8px',
-                  color: '#e0e0e0',
-                  fontSize: '16px',
-                  fontWeight: 600,
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                }}
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', color: '#888', fontSize: '13px', marginBottom: '8px', fontWeight: 500 }}>
-                故事简介
-              </label>
-              <textarea
-                value={editSummary}
-                onChange={(e) => setEditSummary(e.target.value)}
-                placeholder="输入故事简介..."
-                rows={12}
-                style={{
-                  width: '100%',
-                  padding: '12px 16px',
-                  background: '#0f0f0f',
-                  border: '1px solid #2a2a2a',
-                  borderRadius: '8px',
-                  color: '#e0e0e0',
-                  fontSize: '14px',
-                  resize: 'vertical',
-                  minHeight: '200px',
-                  fontFamily: 'inherit',
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                  lineHeight: 1.6,
-                }}
-              />
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                onClick={saveSummary}
-                style={{
-                  padding: '10px 28px',
-                  background: '#6366f1',
-                  border: 'none',
-                  borderRadius: '8px',
-                  color: '#fff',
-                  fontSize: '14px',
-                  cursor: 'pointer',
-                  fontWeight: 500,
-                }}
-              >
-                保存修改
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ===== 角色档案 ===== */}
-        {activeTab === 'characters' && (
-          <div>
-            {characters.length === 0 ? (
-              <p style={{ color: '#666', textAlign: 'center', padding: '80px 0' }}>暂无角色，请先在角色管理中添加</p>
-            ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
-                {characters.map((char) => (
-                  <div key={char.id} style={{ background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '10px', padding: '16px' }}>
-                    <div style={{ fontSize: '15px', fontWeight: 600, color: '#fff', marginBottom: '6px' }}>{char.name}</div>
-                    <div style={{ fontSize: '12px', color: '#6366f1', marginBottom: '10px' }}>
-                      {char.roleType === 'protagonist' ? '主角' : char.roleType === 'supporting' ? '配角' : char.roleType === 'antagonist' ? '反派' : '次要角色'}
-                    </div>
-                    <div style={{ fontSize: '13px', color: '#888', lineHeight: 1.6, marginBottom: '6px' }}>{char.appearance || '暂无外貌描述'}</div>
-                    <div style={{ fontSize: '12px', color: '#666', lineHeight: 1.6, marginBottom: '4px' }}>{char.background || '暂无背景'}</div>
-                    <div style={{ fontSize: '12px', color: '#a78bfa' }}>{char.personality?.join('、') || '暂无性格标签'}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ===== 世界观（问题3：完整显示规则/地点/时间线/社会/文化/经济） ===== */}
-        {activeTab === 'world' && (
-          <div>
-            {worlds.length === 0 ? (
-              <p style={{ color: '#666', textAlign: 'center', padding: '80px 0' }}>暂无世界观设定</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                {worlds.map((w) => (
-                  <div key={w.id} style={{ background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '10px', padding: '16px' }}>
-                    <div style={{ fontSize: '16px', fontWeight: 700, color: '#fff', marginBottom: '8px' }}>{w.name}</div>
-
-                    {/* 概述 */}
-                    <div style={{ fontSize: '13px', color: '#ccc', lineHeight: 1.6, marginBottom: '12px' }}>
-                      {w.overview || w.description || '暂无描述'}
-                    </div>
-
-                    {/* 规则 */}
-                    {w.rules?.length > 0 && (
-                      <div style={{ marginTop: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#6366f1', fontWeight: 600, marginBottom: '6px' }}>世界规则（{w.rules.length}）</div>
-                        {w.rules.map((r: any, i: number) => (
-                          <div key={i} style={{ padding: '8px 12px', background: '#1a1a1a', borderRadius: '6px', marginBottom: '4px' }}>
-                            <div style={{ fontSize: '13px', color: '#e0e0e0', fontWeight: 500 }}>{r.name}</div>
-                            <div style={{ fontSize: '12px', color: '#888' }}>{r.description}</div>
-                            {r.scope && <div style={{ fontSize: '11px', color: '#666', marginTop: '2px' }}>适用范围：{r.scope}</div>}
-                            {r.limit && <div style={{ fontSize: '11px', color: '#666' }}>限制：{r.limit}</div>}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* 地点 */}
-                    {w.locations?.length > 0 && (
-                      <div style={{ marginTop: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#10b981', fontWeight: 600, marginBottom: '6px' }}>关键地点（{w.locations.length}）</div>
-                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                          {w.locations.map((loc: any, i: number) => (
-                            <span key={i} style={{ padding: '4px 10px', background: 'rgba(16,185,129,0.1)', color: '#34d399', borderRadius: '6px', fontSize: '12px' }}>
-                              {loc.name}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 时间线 */}
-                    {w.timeline?.length > 0 && (
-                      <div style={{ marginTop: '12px' }}>
-                        <div style={{ fontSize: '12px', color: '#f59e0b', fontWeight: 600, marginBottom: '6px' }}>历史时间线（{w.timeline.length}）</div>
-                        {w.timeline.map((t: any, i: number) => (
-                          <div key={i} style={{ padding: '6px 12px', background: '#1a1a1a', borderRadius: '6px', marginBottom: '4px', fontSize: '12px', color: '#888' }}>
-                            <span style={{ color: '#f59e0b', fontWeight: 600 }}>{t.era || t.period}：</span>
-                            {t.title || (Array.isArray(t.events) ? t.events.join('、') : t.events)}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* 社会/文化/经济 */}
-                    {(w.society || w.culture || w.economy) && (
-                      <div style={{ marginTop: '12px', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                        {w.society && <span style={{ fontSize: '12px', color: '#888' }}>🏛️ 社会：{w.society}</span>}
-                        {w.culture && <span style={{ fontSize: '12px', color: '#888' }}>🎭 文化：{w.culture}</span>}
-                        {w.economy && <span style={{ fontSize: '12px', color: '#888' }}>💰 经济：{w.economy}</span>}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ===== 感情线（修复1：全部4种类型 + 类型筛选） ===== */}
-        {activeTab === 'emotion' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                {/* 类型筛选按钮组 */}
-                <button
-                  onClick={() => setEmotionFilter('all')}
-                  style={{
-                    padding: '5px 12px',
-                    background: emotionFilter === 'all' ? 'rgba(99,102,241,0.15)' : 'transparent',
-                    border: `1px solid ${emotionFilter === 'all' ? 'rgba(99,102,241,0.3)' : '#2a2a2a'}`,
-                    borderRadius: '6px',
-                    color: emotionFilter === 'all' ? '#818cf8' : '#888',
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                    fontWeight: 500,
-                  }}
-                >
-                  全部
-                </button>
-                {Object.entries(emotionTypeConfig).map(([key, cfg]) => {
-                  // 非成人模式下隐藏肉欲筛选按钮
-                  if (!adultMode && key === 'adult') return null
-                  return (
-                    <button
-                      key={key}
-                      onClick={() => setEmotionFilter(key as typeof emotionFilter)}
-                      style={{
-                        padding: '5px 12px',
-                        background: emotionFilter === key ? `${cfg.color}20` : 'transparent',
-                        border: `1px solid ${emotionFilter === key ? `${cfg.color}50` : '#2a2a2a'}`,
-                        borderRadius: '6px',
-                        color: emotionFilter === key ? cfg.color : '#888',
-                        fontSize: '12px',
-                        cursor: 'pointer',
-                        fontWeight: 500,
-                      }}
-                    >
-                      {cfg.icon} {cfg.label}
-                    </button>
-                  )
-                })}
-              </div>
-              {emotionEvents.length > 0 ? (
-                <button
-                  onClick={() => {
-                    setEmotionEvents(prev => [...prev, {
-                      id: Date.now().toString(),
-                      title: '',
-                      description: '',
-                      type: 'emotion',
-                      characterIds: [],
-                      order: prev.length
-                    }])
-                  }}
-                  style={{
-                    padding: '8px 16px',
-                    background: '#6366f1',
-                    border: 'none',
-                    borderRadius: '8px',
-                    color: '#fff',
-                    fontSize: '14px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  + 添加事件
-                </button>
-              ) : null}
-            </div>
-
-            {filteredEmotionEvents.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '60px 0' }}>
-                <p style={{ color: '#666', marginBottom: '16px' }}>暂无感情线事件</p>
-                <button
-                  onClick={() => {
-                    const defaultEvents = [
-                      { id: Date.now().toString(), title: '初次相遇', description: '主角与关键角色第一次相遇，命运的齿轮开始转动...', type: 'emotion' as const, characterIds: characters.slice(0, 2).map(c => c.id), order: 0 },
-                      { id: (Date.now() + 1).toString(), title: '感情升温', description: '两人关系逐渐亲密，彼此产生好感...', type: 'emotion' as const, characterIds: characters.slice(0, 2).map(c => c.id), order: 1 },
-                      { id: (Date.now() + 2).toString(), title: '情感转折', description: '突发事件检验两人之间的信任和感情...', type: 'emotion' as const, characterIds: characters.slice(0, 2).map(c => c.id), order: 2 },
-                    ]
-                    setEmotionEvents(defaultEvents)
-                    useStore.setState({ emotionEvents: defaultEvents })
-                  }}
-                  style={{
-                    marginTop: '12px',
-                    padding: '8px 24px',
-                    background: '#6366f1',
-                    border: 'none',
-                    borderRadius: '8px',
-                    color: '#fff',
-                    fontSize: '14px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  + 生成默认感情线（3个事件）
-                </button>
-              </div>
-            ) : (
-                filteredEmotionEvents.map((evt, idx) => (
-                  <div key={evt.id} style={{ position: 'relative', marginBottom: '16px' }}>
-                    {/* 节点圆点 */}
-                    <div style={{
-                      position: 'absolute',
-                      left: '-27px',
-                      top: '18px',
-                      width: '14px',
-                      height: '14px',
-                      borderRadius: '50%',
-                      background: emotionTypeConfig[evt.type]?.color || '#ec4899',
-                      border: '3px solid #1a1a1a',
-                      boxShadow: `0 0 8px ${emotionTypeConfig[evt.type]?.color || '#ec4899'}60`,
-                    }} />
-
-                    {/* 事件卡片 */}
-                    <div style={{
-                      background: '#0f0f0f',
-                      border: '1px solid #2a2a2a',
-                      borderRadius: '10px',
-                      padding: '16px',
-                    }}>
-                      <div style={{ display: 'flex', gap: '12px', marginBottom: '12px', alignItems: 'center' }}>
-                        <select
-                          value={evt.type}
-                          onChange={(e) => {
-                            const val = e.target.value as 'emotion' | 'adult' | 'conflict' | 'climax'
-                            setEmotionEvents(prev => prev.map(e => e.id === evt.id ? { ...e, type: val } : e))
-                          }}
-                          style={{
-                            padding: '6px 10px',
-                            background: `${emotionTypeConfig[evt.type]?.color || '#ec4899'}20`,
-                            border: `1px solid ${emotionTypeConfig[evt.type]?.color || '#ec4899'}50`,
-                            borderRadius: '6px',
-                            color: emotionTypeConfig[evt.type]?.color || '#f472b6',
-                            fontSize: '12px',
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                            outline: 'none',
-                          }}
-                        >
-                          <option value="emotion" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>💕 感情线</option>
-                          <option value="conflict" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>⚡ 冲突</option>
-                          <option value="climax" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>⭐ 高潮</option>
-                          <option value="adult" style={{ background: '#1a1a1a', color: '#e0e0e0' }}>🔥 肉欲线</option>
-                        </select>
-
-                        <input
-                          value={evt.title}
-                          onChange={(event) => setEmotionEvents(prev => prev.map(e => e.id === evt.id ? { ...e, title: event.target.value } : e))}
-                          placeholder="事件标题（如：初次相遇、表白、亲密关系）"
-                          style={{
-                            flex: 1,
-                            padding: '8px 12px',
-                            background: '#0f0f0f',
-                            border: '1px solid #2a2a2a',
-                            borderRadius: '6px',
-                            color: '#fff',
-                            fontSize: '14px',
-                            outline: 'none',
-                          }}
-                        />
-
-                        <button
-                          onClick={() => {
-                            if (idx === 0) return
-                            const copy = [...emotionEvents]
-                            const [item] = copy.splice(idx, 1)
-                            copy.splice(idx - 1, 0, item)
-                            setEmotionEvents(copy)
-                          }}
-                          disabled={idx === 0}
-                          style={{
-                            padding: '4px 10px',
-                            background: idx === 0 ? '#1a1a1a' : '#2a2a2a',
-                            border: '1px solid #333',
-                            borderRadius: '6px',
-                            color: idx === 0 ? '#555' : '#e0e0e0',
-                            fontSize: '12px',
-                            cursor: idx === 0 ? 'not-allowed' : 'pointer',
-                          }}
-                        >
-                          ↑
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (idx === emotionEvents.length - 1) return
-                            const copy = [...emotionEvents]
-                            const [item] = copy.splice(idx, 1)
-                            copy.splice(idx + 1, 0, item)
-                            setEmotionEvents(copy)
-                          }}
-                          disabled={idx === emotionEvents.length - 1}
-                          style={{
-                            padding: '4px 10px',
-                            background: idx === emotionEvents.length - 1 ? '#1a1a1a' : '#2a2a2a',
-                            border: '1px solid #333',
-                            borderRadius: '6px',
-                            color: idx === emotionEvents.length - 1 ? '#555' : '#e0e0e0',
-                            fontSize: '12px',
-                            cursor: idx === emotionEvents.length - 1 ? 'not-allowed' : 'pointer',
-                          }}
-                        >
-                          ↓
-                        </button>
-                        <button
-                          onClick={() => setEmotionEvents(prev => prev.filter(e => e.id !== evt.id))}
-                          style={{
-                            padding: '4px 10px',
-                            background: 'rgba(239,68,68,0.1)',
-                            border: '1px solid rgba(239,68,68,0.2)',
-                            borderRadius: '6px',
-                            color: '#ef4444',
-                            fontSize: '12px',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          删除
-                        </button>
-                      </div>
-
-                      <textarea
-                        value={evt.description}
-                        onChange={(event) => setEmotionEvents(prev => prev.map(e => e.id === evt.id ? { ...e, description: event.target.value } : e))}
-                        placeholder="事件详细描述..."
-                        rows={3}
-                        style={{
-                          width: '100%',
-                          padding: '10px 12px',
-                          background: '#0f0f0f',
-                          border: '1px solid #2a2a2a',
-                          borderRadius: '6px',
-                          color: '#ccc',
-                          fontSize: '13px',
-                          resize: 'vertical',
-                          outline: 'none',
-                          lineHeight: 1.5,
-                          marginBottom: '10px',
-                        }}
-                      />
-
-                      {/* 关联角色 */}
-                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                        <span style={{ color: '#888', fontSize: '12px' }}>涉及角色：</span>
-                        {characters.map((char) => {
-                          const selected = (evt.characterIds || []).includes(char.id)
-                          return (
-                            <button
-                              key={char.id}
-                              onClick={() => setEmotionEvents(prev => prev.map(e => {
-                                if (e.id !== evt.id) return e
-                                const ids = e.characterIds || []
-                                return { ...e, characterIds: ids.includes(char.id) ? ids.filter(id => id !== char.id) : [...ids, char.id] }
-                              }))}
-                              style={{
-                                padding: '4px 10px',
-                                borderRadius: '6px',
-                                fontSize: '12px',
-                                cursor: 'pointer',
-                                border: selected ? '1px solid #6366f1' : '1px solid #333',
-                                background: selected ? 'rgba(99,102,241,0.2)' : '#1a1a1a',
-                                color: selected ? '#818cf8' : '#888',
-                              }}
-                            >
-                              {char.name}
-                            </button>
-                          )
-                        })}
-                        {characters.length === 0 && (
-                          <span style={{ color: '#555', fontSize: '12px' }}>暂无角色</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-
-            {emotionEvents.length > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <button
-                  onClick={() => {
-                    updateNovel({ title: editTitle, summary: editSummary })
-                    updateEmotionEvents(emotionEvents)
-                    updateOutlineNodes(outlineNodes)
-                  }}
-                  style={{
-                    padding: '10px 28px',
-                    background: '#6366f1',
-                    border: 'none',
-                    borderRadius: '8px',
-                    color: '#fff',
-                    fontSize: '14px',
-                    cursor: 'pointer',
-                    fontWeight: 500,
-                  }}
-                >
-                  保存感情线
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ===== 剧情大纲（已实装） ===== */}
-        {activeTab === 'outline' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ color: '#888', fontSize: '13px' }}>共 {outlineNodes.length} 个节点</span>
-              <button
-                onClick={addOutlineNode}
-                style={{
-                  padding: '8px 16px',
-                  background: '#6366f1',
-                  border: 'none',
-                  borderRadius: '8px',
-                  color: '#fff',
-                  fontSize: '14px',
-                  cursor: 'pointer',
-                }}
-              >
-                + 添加节点
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {outlineNodes.map((node, idx) => (
-                <div
-                  key={node.id}
-                  style={{
-                    background: '#0f0f0f',
-                    border: '1px solid #2a2a2a',
-                    borderRadius: '10px',
-                    padding: '16px',
-                    display: 'flex',
-                    gap: '12px',
-                    alignItems: 'flex-start',
-                  }}
-                >
-                  <span style={{ color: '#6366f1', fontWeight: 600, fontSize: '13px', minWidth: '60px' }}>
-                    节点 {idx + 1}
-                  </span>
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <input
-                      value={node.title}
-                      onChange={(e) => updateOutlineNode(node.id, 'title', e.target.value)}
-                      placeholder="节点标题（如：第一幕 开端）"
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        background: '#0f0f0f',
-                        border: '1px solid #2a2a2a',
-                        borderRadius: '8px',
-                        color: '#e0e0e0',
-                        fontSize: '14px',
-                        outline: 'none',
-                        boxSizing: 'border-box',
-                      }}
-                    />
-                    <textarea
-                      value={node.content}
-                      onChange={(e) => updateOutlineNode(node.id, 'content', e.target.value)}
-                      placeholder="内容概要..."
-                      rows={3}
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        background: '#0f0f0f',
-                        border: '1px solid #2a2a2a',
-                        borderRadius: '8px',
-                        color: '#e0e0e0',
-                        fontSize: '13px',
-                        resize: 'vertical',
-                        outline: 'none',
-                        boxSizing: 'border-box',
-                        lineHeight: 1.5,
-                      }}
-                    />
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <button
-                      onClick={() => moveOutlineNode(idx, -1)}
-                      disabled={idx === 0}
-                      style={{
-                        padding: '4px 10px',
-                        background: idx === 0 ? '#1a1a1a' : '#2a2a2a',
-                        border: '1px solid #333',
-                        borderRadius: '6px',
-                        color: idx === 0 ? '#555' : '#e0e0e0',
-                        fontSize: '12px',
-                        cursor: idx === 0 ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      onClick={() => moveOutlineNode(idx, 1)}
-                      disabled={idx === outlineNodes.length - 1}
-                      style={{
-                        padding: '4px 10px',
-                        background: idx === outlineNodes.length - 1 ? '#1a1a1a' : '#2a2a2a',
-                        border: '1px solid #333',
-                        borderRadius: '6px',
-                        color: idx === outlineNodes.length - 1 ? '#555' : '#e0e0e0',
-                        fontSize: '12px',
-                        cursor: idx === outlineNodes.length - 1 ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      ↓
-                    </button>
-                    <button
-                      onClick={() => deleteOutlineNode(node.id)}
-                      style={{
-                        padding: '4px 10px',
-                        background: 'rgba(239,68,68,0.15)',
-                        border: '1px solid rgba(239,68,68,0.3)',
-                        borderRadius: '6px',
-                        color: '#ef4444',
-                        fontSize: '12px',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      删除
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {outlineNodes.length === 0 && (
-              <p style={{ color: '#666', textAlign: 'center', padding: '40px 0' }}>暂无大纲节点，点击右上角添加</p>
-            )}
-
-            {outlineNodes.length > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <button
-                  onClick={saveSummary}
-                  style={{
-                    padding: '10px 28px',
-                    background: '#6366f1',
-                    border: 'none',
-                    borderRadius: '8px',
-                    color: '#fff',
-                    fontSize: '14px',
-                    cursor: 'pointer',
-                    fontWeight: 500,
-                  }}
-                >
-                  保存大纲
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ===== 章节目录（问题6：显示字数和状态） ===== */}
-        {activeTab === 'chapters' && (
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <span style={{ color: '#888', fontSize: '13px' }}>共 {chapters.length} 章</span>
-              <span style={{ color: '#666', fontSize: '12px' }}>
-                总字数：{chapters.reduce((sum, c) => sum + (c.wordCount || 0), 0)}
-              </span>
-            </div>
-
-            {chapters.length === 0 ? (
-              <p style={{ color: '#666', textAlign: 'center', padding: '80px 0' }}>暂无章节，请使用长篇规划生成</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {chapters.map((ch, idx) => (
-                  <div key={ch.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', background: '#0f0f0f', borderRadius: '8px', border: '1px solid #2a2a2a' }}>
-                    <span style={{ color: '#6366f1', fontWeight: 700, fontSize: '13px', minWidth: '60px' }}>
-                      第{idx + 1}章
-                    </span>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: '14px', fontWeight: 500, color: '#fff' }}>{ch.title}</div>
-                      <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>{ch.summary}</div>
-                    </div>
-                    <span style={{
-                      padding: '2px 10px',
-                      borderRadius: '6px',
-                      fontSize: '12px',
-                      background: ch.status === 'completed' ? 'rgba(34,197,94,0.15)' : ch.status === 'polished' ? 'rgba(99,102,241,0.15)' : 'rgba(234,179,8,0.15)',
-                      color: ch.status === 'completed' ? '#4ade80' : ch.status === 'polished' ? '#818cf8' : '#facc15'
-                    }}>
-                      {ch.status === 'completed' ? '完成' : ch.status === 'polished' ? '已润色' : '草稿'}
-                    </span>
-                    {ch.wordCount > 0 && (
-                      <span style={{ fontSize: '12px', color: '#666' }}>{ch.wordCount}字</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ===== 关系图谱（问题7：角色类型区分主角/配角/反派颜色） ===== */}
-        {activeTab === 'graph' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ color: '#888', fontSize: '13px' }}>
-                拖拽节点调整位置，拖拽连线创建关系
-              </span>
-              <span style={{ color: '#888', fontSize: '13px' }}>
-                节点数：{rfNodes.length} | 关系数：{rfEdges.length}
-              </span>
-            </div>
-
-            {characters.length === 0 ? (
-              <p style={{ color: '#666', textAlign: 'center', padding: '80px 0' }}>
-                暂无角色，请先在角色管理中添加
-              </p>
-            ) : (
-              <div style={{ height: '520px', border: '1px solid #2a2a2a', borderRadius: '10px', overflow: 'hidden' }}>
-                <ReactFlow
-                  nodes={characters.map((char, i) => ({
-                    id: char.id,
-                    data: { label: char.name },
-                    position: { x: 100 + (i % 4) * 200, y: 100 + Math.floor(i / 4) * 150 },
-                    style: {
-                      background: char.roleType === 'protagonist' ? 'rgba(99,102,241,0.25)' :
-                                 char.roleType === 'antagonist' ? 'rgba(239,68,68,0.25)' :
-                                 'rgba(168,85,247,0.2)',
-                      color: '#e0e0e0',
-                      border: '2px solid ' + (char.roleType === 'protagonist' ? '#6366f1' :
-                                              char.roleType === 'antagonist' ? '#ef4444' :
-                                              '#a855f7'),
-                      borderRadius: '10px',
-                      padding: '12px 20px',
-                      fontSize: '14px',
-                      fontWeight: 700,
-                      minWidth: '120px',
-                      textAlign: 'center' as const,
-                      boxShadow: '0 0 12px rgba(0,0,0,0.3)',
-                    },
-                  }))}
-                  edges={characters.flatMap((char) =>
-                    (char.relationships || [])
-                      .filter((rel: any) => characters.some((c) => c.id === rel.targetId))
-                      .map((rel: any) => ({
-                        id: `e-${char.id}-${rel.targetId}`,
-                        source: char.id,
-                        target: rel.targetId,
-                        label: rel.type || '关系',
-                        labelStyle: { fill: '#888', fontSize: 12 },
-                        style: { stroke: '#6366f1', strokeWidth: 2 },
-                        animated: true,
-                      }))
-                  )}
-                  onNodesChange={onNodesChange}
-                  onEdgesChange={onEdgesChange}
-                  onConnect={onConnect}
-                  fitView
-                  style={{ background: '#0f0f0f' }}
-                >
-                  <Background color="#333" gap={16} />
-                  <Controls style={{ background: '#1a1a1a', color: '#e0e0e0' }} />
-                  <MiniMap
-                    style={{ background: '#1a1a1a' }}
-                    nodeColor={(n: any) => {
-                      const char = characters.find((c) => c.id === n.id)
-                      return char?.roleType === 'protagonist' ? '#6366f1' :
-                             char?.roleType === 'antagonist' ? '#ef4444' :
-                             '#a855f7'
-                    }}
-                    maskColor="rgba(15,15,15,0.7)"
-                  />
-                </ReactFlow>
-              </div>
-            )}
-          </div>
-        )}
+      {/* 右侧内容区 */}
+      <div style={{ flex: 1, overflow: 'auto', background: '#050505' }}>
+        {renderTabContent()}
       </div>
-    </PageWrapper>
+    </div>
   )
+}
+
+// ==================== 样式常量 ====================
+const inputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '10px 14px',
+  background: '#0f0f0f',
+  border: '1px solid #2a2a2a',
+  borderRadius: '8px',
+  color: '#e0e0e0',
+  fontSize: '14px',
+  outline: 'none',
+  boxSizing: 'border-box',
+}
+
+const btnPrimaryStyle: React.CSSProperties = {
+  marginTop: 12,
+  padding: '8px 16px',
+  background: '#8b5cf6',
+  color: '#fff',
+  border: 'none',
+  borderRadius: '6px',
+  fontSize: '13px',
+  fontWeight: 600,
+  cursor: 'pointer',
+}
+
+const cardStyle: React.CSSProperties = {
+  padding: '16px',
+  background: '#0f0f0f',
+  border: '1px solid #1a1a1a',
+  borderRadius: '10px',
+}
+
+const tabBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '8px 10px',
+  marginBottom: 4,
+  borderRadius: 6,
+  fontSize: 13,
+  fontWeight: 500,
+  cursor: 'pointer',
+  border: 'none',
+  textAlign: 'left',
+  transition: 'all 0.2s',
 }

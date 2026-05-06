@@ -1,441 +1,433 @@
-import { useState, useCallback } from 'react'
-import { useAppStore } from '../../store'
-import { loadPrompt } from '../../utils/promptLoader'
-import PageWrapper from '../../components/PageWrapper'
-import type { AIModel } from '../../../config/types'
+/**
+ * 润色区（Polish Studio）增强版
+ * SRS v2.3 要求：支持局部选区润色 + 专项风格
+ * 
+ * 风格：文学化 / 情欲强化 / 病娇风 / 黑暗向
+ * 深度：轻度 / 中度 / 重度
+ */
 
-// ==========================================
-// 工具
-// ==========================================
+import React, { useState, useCallback, useRef } from 'react'
+import { useStore } from '../../store'
 
-async function callAIStream(
-  model: AIModel,
-  systemPrompt: string,
-  userPrompt: string,
-  onChunk: (text: string) => void
-): Promise<string> {
-  const url = model.baseUrl.replace(/\/+$/, '') + '/chat/completions'
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${model.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: model.modelId,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      temperature: model.temperature,
-      max_tokens: model.maxTokens,
-      stream: true,
-    }),
-  })
-  if (!res.ok) {
-    const errText = await res.text().catch(() => '')
-    throw new Error(`AI 请求失败 (${res.status}): ${errText || res.statusText}`)
-  }
+type PolishStyle = 'literary' | 'erotic' | 'yandere' | 'dark' | 'normal' | 'deai'
+type PolishDepth = 'light' | 'medium' | 'deep'
 
-  const reader = res.body?.getReader()
-  const decoder = new TextDecoder()
-  let fullText = ''
-  if (!reader) throw new Error('响应流不可用')
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    const chunk = decoder.decode(value, { stream: true })
-    for (const line of chunk.split('\n')) {
-      const t = line.trim()
-      if (!t.startsWith('data: ')) continue
-      const data = t.slice(6)
-      if (data === '[DONE]') continue
-      try {
-        const p = JSON.parse(data)
-        const c = p.choices?.[0]?.delta?.content
-        if (typeof c === 'string') {
-          fullText += c
-          onChunk(fullText)
-        }
-      } catch {
-        // 忽略解析失败
-      }
-    }
-  }
-  return fullText
-}
-
-// ==========================================
-// 润色风格配置
-// ==========================================
-
-type PolishStyle =
-  | 'formal'
-  | 'vivid'
-  | 'concise'
-  | 'ornate'
-  | 'adult'
-  | 'removeAI'
-
-interface StyleConfig {
+interface PolishStyleConfig {
+  id: PolishStyle
   label: string
-  description: string
-  systemExtra: string
+  icon: string
+  color: string
+  systemPrompt: string
 }
 
-const styleConfigMap: Record<PolishStyle, StyleConfig> = {
-  formal: {
-    label: '正式严谨',
-    description: '规范用词，提升逻辑性和专业感',
-    systemExtra: '请使用正式、规范的语言风格，提升文本的逻辑性和专业感，避免口语化表达。',
+const POLISH_STYLES: PolishStyleConfig[] = [
+  {
+    id: 'normal',
+    label: '普通润色',
+    icon: '✨',
+    color: '#8b5cf6',
+    systemPrompt: '对文本进行通顺度和表达优化，修正语病，提升可读性。',
   },
-  vivid: {
-    label: '生动形象',
-    description: '增强画面感和感官描写',
-    systemExtra: '请增强画面感和感官描写，让场景更生动、更有代入感，多用具体细节替代抽象描述。',
+  {
+    id: 'literary',
+    label: '文学化',
+    icon: '📚',
+    color: '#3b82f6',
+    systemPrompt: '将文本文学化处理：增加修辞手法（比喻、拟人、通感），提升画面感和意境，语言更加凝练优美。保留原意，但让文字更有质感。',
   },
-  concise: {
-    label: '简洁有力',
-    description: '删繁就简，节奏明快',
-    systemExtra: '请精简冗余表达，删除不必要的修饰词和重复句，让行文更简洁、节奏更明快。',
+  {
+    id: 'erotic',
+    label: '情欲强化',
+    icon: '🔥',
+    color: '#ec4899',
+    systemPrompt: '强化文本中的情欲氛围：增加感官细节描写（触觉、嗅觉、温度、心跳），深化心理活动和欲望张力。保持优雅含蓄，不粗俗。重点描写眼神接触、肢体距离、呼吸变化、皮肤触感等微妙细节。',
   },
-  ornate: {
-    label: '华丽辞藻',
-    description: '提升文学性，修辞丰富',
-    systemExtra: '请提升文学性和修辞水平，适当运用比喻、排比、对仗等修辞手法，文字富有诗意和韵律感。',
+  {
+    id: 'yandere',
+    label: '病娇风',
+    icon: '😈',
+    color: '#ef4444',
+    systemPrompt: '将文本转换为病娇风格：增加偏执、占有欲、极端情感的描写。语言带有甜蜜与危险并存的反差感，角色表现出对目标的极度依恋和排他性。心理描写要细腻，展现从温柔到疯狂的渐变。',
   },
-  adult: {
-    label: '成人向',
-    description: '强化情欲张力与感官描写',
-    systemExtra: '请强化情欲张力和感官描写，运用五感（视觉、触觉、听觉、嗅觉、味觉）让情欲场景更具体、更露骨、更有冲击力。',
+  {
+    id: 'dark',
+    label: '黑暗向',
+    icon: '🌑',
+    color: '#1f2937',
+    systemPrompt: '将文本转换为黑暗风格：增加压抑、绝望、虚无的氛围。语言更加冷峻锋利，描写残酷现实和人性阴暗面。保持文学性，不沦为猎奇。增加环境对情绪的映射（天气、光线、声音）。',
   },
-  removeAI: {
-    label: '去AI味',
-    description: '消除AI生成痕迹',
-    systemExtra: '请消除文本中的AI生成痕迹：去除模板化过渡句、过度副词（不禁、缓缓、微微等）、总结性语句、千篇一律的情感描写，让文字更像人类作家写的。',
+  {
+    id: 'deai',
+    label: '去 AI 味',
+    icon: '🧹',
+    color: '#10b981',
+    systemPrompt: '去除文本中的 AI 生成痕迹：消除"首先/其次/最后/总而言之"等模板化连接词，减少重复句式，增加人类写作的不规则性和个性化表达。让文本读起来像真人写的网络小说。',
   },
-}
+]
 
-// ==========================================
-// 主组件
-// ==========================================
+const DEPTH_CONFIG = {
+  light: { label: '轻度', percent: 30 },
+  medium: { label: '中度', percent: 60 },
+  deep: { label: '重度', percent: 100 },
+}
 
 export default function PolishPage() {
-  const aiModels = useAppStore((s) => s.aiModels)
-  const currentModel = useAppStore((s) => s.currentModel)
-  const adultMode = useAppStore((s) => s.adultMode)
-  const addLog = useAppStore((s) => s.addLog)
-  const addMemory = useAppStore((s) => s.addMemory)
+  const chapters = useStore((s) => s.chapters)
+  const currentModel = useStore((s) => s.currentModel)
+  const applyPolishResult = useStore((s) => s.applyPolishResult)
+  const addLog = useStore((s) => s.addLog)
 
-  const [selectedModelId, setSelectedModelId] = useState(
-    currentModel?.id ?? ''
-  )
-  const [style, setStyle] = useState<PolishStyle>(
-    adultMode ? 'adult' : 'vivid'
-  )
-  const [original, setOriginal] = useState('')
-  const [polished, setPolished] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [progress, setProgress] = useState(0)
-  const [statusText, setStatusText] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<'split' | 'polished'>('split')
+  const [selectedChapterId, setSelectedChapterId] = useState('')
+  const [content, setContent] = useState('')
+  const [selectedStyle, setSelectedStyle] = useState<PolishStyle>('normal')
+  const [depth, setDepth] = useState<PolishDepth>('medium')
+  const [isPolishing, setIsPolishing] = useState(false)
+  const [result, setResult] = useState('')
+  const [aiScore, setAiScore] = useState(0)
+  const [aiWords, setAiWords] = useState<string[]>([])
+  const [selection, setSelection] = useState({ start: 0, end: 0, text: '' })
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
-  const selectedModel =
-    aiModels.find((m) => m.id === selectedModelId) || currentModel
+  const selectedChapter = chapters.find((c) => c.id === selectedChapterId)
 
+  // 加载章节
+  const handleLoadChapter = (id: string) => {
+    setSelectedChapterId(id)
+    const ch = chapters.find((c) => c.id === id)
+    if (ch) {
+      setContent(ch.content || '')
+      setResult('')
+      setAiScore(0)
+      setAiWords([])
+    }
+  }
+
+  // 检测选区
+  const handleTextSelect = () => {
+    const ta = textareaRef.current
+    if (!ta) return
+    const start = ta.selectionStart
+    const end = ta.selectionEnd
+    if (start !== end) {
+      setSelection({ start, end, text: content.slice(start, end) })
+    }
+  }
+
+  // AI 味检测
+  const detectAiFlavor = useCallback((text: string) => {
+    const AI_FLAVOR_WORDS = [
+      '首先', '其次', '最后', '总而言之', '综上所述', '不难发现',
+      '值得注意的是', '某种程度上', '一定程度上', '众所周知',
+      '毫无疑问', '显然', '显然地', '可以想见', '可想而知',
+      '不得不说', '平心而论', '客观地说', '从某种意义上说',
+    ]
+    let found: string[] = []
+    AI_FLAVOR_WORDS.forEach((w) => {
+      if (text.includes(w)) found.push(w)
+    })
+    const score = Math.min(100, Math.round((found.length / 5) * 100))
+    return { score, words: found }
+  }, [])
+
+  // 执行润色
   const handlePolish = useCallback(async () => {
-    if (!original.trim()) {
-      setError('请输入需要润色的文本')
-      return
-    }
-    if (!selectedModel) {
-      setError('请选择 AI 模型')
+    if (!currentModel) {
+      addLog({ type: 'error', message: '请先配置 AI 模型', detail: '' })
       return
     }
 
-    setError(null)
-    setLoading(true)
-    setProgress(5)
-    setStatusText('正在加载提示词...')
-    setPolished('')
+    const targetText = selection.text || content
+    if (!targetText.trim()) {
+      addLog({ type: 'warn', message: '没有可润色的内容', detail: '' })
+      return
+    }
+
+    setIsPolishing(true)
+    setResult('')
+    abortRef.current = new AbortController()
+
+    const style = POLISH_STYLES.find((s) => s.id === selectedStyle)!
+    const depthConfig = DEPTH_CONFIG[depth]
+
+    // 先检测 AI 味
+    const { score, words } = detectAiFlavor(targetText)
+    setAiScore(score)
+    setAiWords(words)
 
     try {
-      const promptText = loadPrompt('prompts')
-      if (!promptText) throw new Error('prompts.md 加载失败')
+      const res = await fetch(`${currentModel.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${currentModel.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: currentModel.modelId,
+          messages: [
+            {
+              role: 'system',
+              content: `${style.systemPrompt}\n\n润色深度：${depthConfig.label}（约修改 ${depthConfig.percent}% 的表达方式）\n\n要求：\n1. 只返回润色后的文本，不要解释\n2. 保持原意和情节不变\n3. 不要添加原文没有的内容`,
+            },
+            {
+              role: 'user',
+              content: `请润色以下文本：\n\n${targetText}`,
+            },
+          ],
+          temperature: 0.7,
+          max_tokens: Math.min(targetText.length * 2, 8000),
+          stream: true,
+        }),
+        signal: abortRef.current.signal,
+      })
 
-      // 提取润色系统提示词
-      let systemPrompt = ''
+      const reader = res.body?.getReader()
+      const decoder = new TextDecoder()
+      let polished = ''
 
-      if (style === 'adult') {
-        const adultMatch = promptText.match(
-          /## 成人情色小说 - 润色系统提示词\s*([\s\S]*?)(?=\n\s*---|\n\s*## |$)/
-        )
-        systemPrompt = adultMatch
-          ? adultMatch[1].trim()
-          : '你是一位极具文学功底的中文成人情色小说润色专家。'
-      } else if (style === 'removeAI') {
-        const aiMatch = promptText.match(
-          /## 去AI味专用提示词\s*([\s\S]*?)(?=\n\s*---|\n\s*## |$)/
-        )
-        systemPrompt = aiMatch
-          ? aiMatch[1].trim()
-          : '你是一位专业的人类化文本改写专家。'
-      } else {
-        const polishMatch = promptText.match(
-          /## 润色系统提示词\s*([\s\S]*?)(?=\n\s*---|\n\s*## |$)/
-        )
-        systemPrompt = polishMatch
-          ? polishMatch[1].trim()
-          : '你是一位顶级文本润色编辑。'
-      }
-
-      // 追加风格指令
-      systemPrompt += '\n\n' + styleConfigMap[style].systemExtra
-
-      // 用户提示词模板
-      let userTemplate = ''
-      if (style === 'removeAI') {
-        const match = promptText.match(
-          /## 去AI味专用提示词\s*[\s\S]*?(?=\n\s*---|$)/
-        )
-        userTemplate = match ? match[0] : ''
-      } else {
-        const match = promptText.match(
-          /## 润色中心 - 润色提示词模板\s*[\s\S]*?(?=\n\s*---|$)/
-        )
-        userTemplate = match ? match[0] : ''
-      }
-
-      if (!userTemplate) {
-        // 兜底：直接构建用户提示词
-        userTemplate = `请对以下文本进行润色优化。
-
-【润色风格】{style}
-
-【润色原则】
-- 保留剧情和人物行为不变
-- 只做表达层面的优化
-
-【待润色文本】
-{content}`
-      }
-
-      const vars: Record<string, string> = {
-        level: '深度',
-        style: styleConfigMap[style].label,
-        content: original.trim(),
-      }
-
-      let userPrompt = userTemplate
-      for (const [k, v] of Object.entries(vars)) {
-        userPrompt = userPrompt.split(`{${k}}`).join(v)
-      }
-
-      // 如果去AI味模板中有 {content} 但上面没替换到（因为模板结构不同），兜底替换
-      userPrompt = userPrompt.split('{content}').join(original.trim())
-
-      setProgress(15)
-      setStatusText('正在请求 AI 润色...')
-
-      const result = await callAIStream(
-        selectedModel,
-        systemPrompt,
-        userPrompt,
-        (text) => {
-          const p = Math.min(15 + Math.floor((text.length / original.length) * 80), 95)
-          setProgress(p)
-          setStatusText('AI 正在润色中...')
-          setPolished(text)
+      while (true) {
+        const { done, value } = await reader!.read()
+        if (done) break
+        const chunk = decoder.decode(value, { stream: true })
+        const lines = chunk.split('\n').filter((l) => l.trim())
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6)
+            if (data === '[DONE]') continue
+            try {
+              const parsed = JSON.parse(data)
+              const text = parsed.choices?.[0]?.delta?.content || ''
+              polished += text
+              setResult(polished)
+            } catch {}
+          }
         }
-      )
+      }
 
-      setPolished(result)
-      setProgress(100)
-      setStatusText('润色完成')
-      setLoading(false)
+      // 如果是局部润色，合并回原文
+      if (selection.text) {
+        const merged = content.slice(0, selection.start) + polished + content.slice(selection.end)
+        setResult(merged)
+      }
 
       addLog({
         type: 'success',
-        message: '文本润色完成',
-        detail: `风格：${styleConfigMap[style].label}，原 ${original.length} 字 → 润色后 ${result.length} 字`,
+        message: `润色完成：${style.label}`,
+        detail: `AI 味评分: ${score} | 检测词: ${words.join('、') || '无'}`,
       })
-      addMemory({
-        id: `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
-        type: 'llm',
-        content: `文本润色完成\n风格：${styleConfigMap[style].label}\n原 ${original.length} 字 → 润色后 ${result.length} 字`,
-        source: '文本润色',
-        tags: ['润色', 'AI生成', styleConfigMap[style].label],
-        modelName: selectedModel?.name ?? null,
-        projectId: null,
-        timestamp: Date.now(),
-        duration: null,
-      })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : '未知错误'
-      setError(`润色失败：${msg}`)
-      setLoading(false)
-      addLog({ type: 'error', message: '文本润色失败', detail: msg })
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        addLog({ type: 'error', message: '润色失败', detail: err.message })
+      }
+    } finally {
+      setIsPolishing(false)
     }
-  }, [original, selectedModel, style, adultMode, addLog])
+  }, [currentModel, content, selection, selectedStyle, depth, detectAiFlavor, addLog])
 
-  const handleReplace = useCallback(() => {
-    if (!polished.trim()) return
-    setOriginal(polished.trim())
-    addLog({ type: 'success', message: '已用润色稿替换原稿', detail: '' })
-  }, [polished, addLog])
+  // 应用润色结果到章节
+  const handleApply = () => {
+    if (!selectedChapterId || !result) return
+    applyPolishResult(selectedChapterId, {
+      original: content,
+      polished: result,
+      aiScore,
+      aiWords,
+      level: depth,
+      style: selectedStyle === 'literary' ? 'literary' : selectedStyle === 'erotic' ? 'webnovel' : 'custom',
+    })
+    setContent(result)
+    addLog({ type: 'success', message: '润色结果已应用到章节', detail: selectedChapter?.title || '' })
+  }
 
-  // ==========================================
-  // 渲染
-  // ==========================================
+  const handleCancel = () => {
+    abortRef.current?.abort()
+    setIsPolishing(false)
+  }
 
   return (
-    <PageWrapper
-      title="文本润色"
-      subtitle="输入文本，选择风格，AI 将为你进行专业的文字打磨与风格转换"
-    >
-      {/* 配置面板 */}
-      <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '12px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '16px' }}>
-          <div>
-            <div style={{ fontSize: '14px', color: '#aaa', marginBottom: '8px' }}>AI 模型 <span style={{ color: '#ef4444' }}>*</span></div>
-            <select
-              value={selectedModelId}
-              onChange={(e) => setSelectedModelId(e.target.value)}
-              style={{ width: '100%', padding: '10px 14px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }}
-            >
-              {aiModels.length === 0 && <option value="">未配置模型</option>}
-              {aiModels.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
+    <div style={{ padding: '24px', maxWidth: 1200, margin: '0 auto', color: '#e0e0e0' }}>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 20 }}>✨ 文本润色工作室</h2>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr 1fr', gap: 20, height: 'calc(100vh - 160px)' }}>
+        {/* 左侧章节列表 */}
+        <div style={{ background: '#0a0a0a', borderRadius: 10, border: '1px solid #1a1a1a', overflow: 'auto' }}>
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid #1a1a1a' }}>
+            <h3 style={{ fontSize: 13, fontWeight: 600, color: '#9ca3af' }}>📑 选择章节</h3>
           </div>
-          {/* 润色风格选择 */}
-          <div>
-            <div style={{ display: 'block', color: '#888', fontSize: '13px', marginBottom: '12px', fontWeight: 500 }}>
-              润色风格
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px' }}>
-              {[
-                { key: 'formal', title: '正式严谨', desc: '规范用词，提升逻辑性和专业感' },
-                { key: 'vivid', title: '生动形象', desc: '增强画面感和感官描写' },
-                { key: 'concise', title: '简洁有力', desc: '删繁就简，节奏明快' },
-                { key: 'ornate', title: '华丽辞藻', desc: '提升文学性，修辞丰富' },
-                { key: 'removeAI', title: '去AI味', desc: '消除AI生成痕迹' },
-              ].map((s) => (
+          {chapters.sort((a, b) => a.order - b.order).map((ch) => (
+            <button
+              key={ch.id}
+              onClick={() => handleLoadChapter(ch.id)}
+              style={{
+                width: '100%',
+                padding: '8px 16px',
+                textAlign: 'left',
+                background: selectedChapterId === ch.id ? 'rgba(139,92,246,0.15)' : 'transparent',
+                color: selectedChapterId === ch.id ? '#a78bfa' : '#9ca3af',
+                border: 'none',
+                borderLeft: selectedChapterId === ch.id ? '3px solid #8b5cf6' : '3px solid transparent',
+                cursor: 'pointer',
+                fontSize: 12,
+              }}
+            >
+              {ch.title}
+            </button>
+          ))}
+        </div>
+
+        {/* 中间原文编辑器 */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 13, color: '#9ca3af' }}>📝 原文 {selection.text ? `(已选 ${selection.text.length} 字)` : ''}</span>
+            {aiScore > 0 && (
+              <span style={{ fontSize: 12, color: aiScore > 60 ? '#ef4444' : aiScore > 30 ? '#f59e0b' : '#10b981' }}>
+                AI 味: {aiScore}/100 {aiWords.length > 0 ? `(${aiWords.length}个)` : ''}
+              </span>
+            )}
+          </div>
+          <textarea
+            ref={textareaRef}
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            onSelect={handleTextSelect}
+            placeholder="选择章节或粘贴文本..."
+            style={{
+              flex: 1,
+              padding: 16,
+              background: '#0f0f0f',
+              border: '1px solid #2a2a2a',
+              borderRadius: 8,
+              color: '#e0e0e0',
+              fontSize: 14,
+              lineHeight: 1.7,
+              resize: 'none',
+              outline: 'none',
+            }}
+          />
+        </div>
+
+        {/* 右侧润色面板 */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* 风格选择 */}
+          <div style={{ background: '#0a0a0a', borderRadius: 8, border: '1px solid #1a1a1a', padding: 12 }}>
+            <h3 style={{ fontSize: 12, fontWeight: 600, color: '#9ca3af', marginBottom: 10 }}>🎨 润色风格</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              {POLISH_STYLES.map((s) => (
                 <button
-                  key={s.key}
-                  onClick={() => setStyle(s.key as any)}
+                  key={s.id}
+                  onClick={() => setSelectedStyle(s.id)}
                   style={{
-                    padding: '16px',
-                    background: style === s.key ? 'rgba(99,102,241,0.12)' : '#0f0f0f',
-                    border: style === s.key ? '2px solid #6366f1' : '1px solid #2a2a2a',
-                    borderRadius: '12px',
+                    padding: '8px 10px',
+                    borderRadius: 6,
+                    border: selectedStyle === s.id ? `1px solid ${s.color}` : '1px solid #2a2a2a',
+                    background: selectedStyle === s.id ? `${s.color}15` : '#0f0f0f',
+                    color: selectedStyle === s.id ? s.color : '#9ca3af',
+                    fontSize: 12,
                     cursor: 'pointer',
-                    textAlign: 'left',
-                    transition: 'all 0.2s',
+                    fontWeight: selectedStyle === s.id ? 600 : 400,
                   }}
                 >
-                  <div style={{
-                    fontSize: '15px',
-                    fontWeight: 700,
-                    color: style === s.key ? '#818cf8' : '#e0e0e0',
-                    marginBottom: '6px',
-                  }}>
-                    {s.title}
-                  </div>
-                  <div style={{
-                    fontSize: '12px',
-                    color: style === s.key ? 'rgba(129,140,248,0.7)' : '#666',
-                    lineHeight: 1.5,
-                  }}>
-                    {s.desc}
-                  </div>
+                  <span style={{ marginRight: 4 }}>{s.icon}</span>
+                  {s.label}
                 </button>
               ))}
             </div>
           </div>
-        </div>
 
-        {error && (
-          <div style={{ background: '#ef444410', border: '1px solid #ef444440', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', color: '#ef4444' }}>{error}</div>
-        )}
-
-        <button
-          onClick={handlePolish}
-          disabled={loading}
-          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', background: loading ? '#6366f180' : '#6366f1', color: '#fff', border: 'none', borderRadius: '8px', padding: '12px 16px', fontSize: '14px', fontWeight: 500, cursor: loading ? 'not-allowed' : 'pointer' }}
-        >
-          {loading ? <><span style={{ display: 'inline-block', width: '16px', height: '16px', border: '2px solid #ffffff40', borderTopColor: '#fff', borderRadius: '50%' }} />{statusText}</> : <><span>🔧</span>开始润色</>}
-        </button>
-
-        {loading && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <div style={{ width: '100%', height: '8px', background: '#0f0f0f', borderRadius: '9999px', overflow: 'hidden' }}>
-              <div style={{ height: '100%', background: '#6366f1', borderRadius: '9999px', width: `${progress}%` }} />
+          {/* 深度选择 */}
+          <div style={{ background: '#0a0a0a', borderRadius: 8, border: '1px solid #1a1a1a', padding: 12 }}>
+            <h3 style={{ fontSize: 12, fontWeight: 600, color: '#9ca3af', marginBottom: 10 }}>⚡ 润色深度</h3>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {(Object.keys(DEPTH_CONFIG) as PolishDepth[]).map((d) => (
+                <button
+                  key={d}
+                  onClick={() => setDepth(d)}
+                  style={{
+                    flex: 1,
+                    padding: '6px 0',
+                    borderRadius: 6,
+                    border: depth === d ? '1px solid #8b5cf6' : '1px solid #2a2a2a',
+                    background: depth === d ? 'rgba(139,92,246,0.15)' : '#0f0f0f',
+                    color: depth === d ? '#a78bfa' : '#9ca3af',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {DEPTH_CONFIG[d].label}
+                </button>
+              ))}
             </div>
-            <div style={{ fontSize: '12px', color: '#666', textAlign: 'right' }}>{progress}%</div>
           </div>
-        )}
-      </div>
 
-      {/* 输入 + 对比区域 */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        {polished && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {/* 操作按钮 */}
+          <div style={{ display: 'flex', gap: 8 }}>
             <button
-              onClick={() => setViewMode('split')}
-              style={{ fontSize: '12px', padding: '6px 12px', borderRadius: '8px', border: viewMode === 'split' ? '1px solid #6366f1' : '1px solid #333', background: 'transparent', color: viewMode === 'split' ? '#6366f1' : '#888', cursor: 'pointer' }}
+              onClick={isPolishing ? handleCancel : handlePolish}
+              disabled={!content.trim() || !currentModel}
+              style={{
+                flex: 1,
+                padding: '10px 0',
+                background: isPolishing ? '#ef4444' : '#8b5cf6',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 6,
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+                opacity: !content.trim() || !currentModel ? 0.5 : 1,
+              }}
             >
-              左右对比
+              {isPolishing ? '⏹ 停止' : selection.text ? '✨ 润色选区' : '✨ 全文润色'}
             </button>
-            <button
-              onClick={() => setViewMode('polished')}
-              style={{ fontSize: '12px', padding: '6px 12px', borderRadius: '8px', border: viewMode === 'polished' ? '1px solid #6366f1' : '1px solid #333', background: 'transparent', color: viewMode === 'polished' ? '#6366f1' : '#888', cursor: 'pointer' }}
-            >
-              仅润色稿
-            </button>
-            <div style={{ flex: 1 }} />
-            {polished && (
-              <button onClick={handleReplace} style={{ fontSize: '12px', padding: '6px 12px', borderRadius: '8px', background: '#6366f1', color: '#fff', border: 'none', cursor: 'pointer' }}>
-                一键替换原稿
-              </button>
-            )}
           </div>
-        )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: viewMode === 'split' && polished ? '1fr 1fr' : '1fr', gap: '16px' }}>
-          <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '12px', padding: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-              <span style={{ fontSize: '14px', fontWeight: 500, color: '#ccc' }}>原稿</span>
-              <span style={{ fontSize: '12px', color: '#666' }}>{original.length} 字</span>
+          {selection.text && (
+            <div style={{ padding: 8, background: 'rgba(139,92,246,0.08)', borderRadius: 6, fontSize: 11, color: '#a78bfa' }}>
+              💡 已选中 {selection.text.length} 字，将只润色选区
             </div>
-            <textarea
-              value={original}
-              onChange={(e) => { setOriginal(e.target.value); setPolished('') }}
-              placeholder="在此粘贴或输入需要润色的文本..."
-              style={{ width: '100%', padding: '16px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none', minHeight: '360px', resize: 'vertical', fontFamily: 'monospace', lineHeight: 1.6, boxSizing: 'border-box' }}
-            />
-          </div>
+          )}
 
-          {(viewMode === 'split' || polished) && (
-            <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '12px', padding: '16px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-                <span style={{ fontSize: '14px', fontWeight: 500, color: '#ccc' }}>
-                  润色稿
-                  {polished && <span style={{ marginLeft: '8px', fontSize: '12px', color: '#6366f1' }}>{styleConfigMap[style].label}</span>}
-                </span>
-                <span style={{ fontSize: '12px', color: '#666' }}>{polished.length} 字</span>
+          {/* 润色结果 */}
+          {result && (
+            <>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <span style={{ fontSize: 13, color: '#9ca3af' }}>✨ 润色结果</span>
+                <textarea
+                  value={result}
+                  onChange={(e) => setResult(e.target.value)}
+                  style={{
+                    flex: 1,
+                    padding: 16,
+                    background: '#0f0f0f',
+                    border: '1px solid #2a2a2a',
+                    borderRadius: 8,
+                    color: '#e0e0e0',
+                    fontSize: 14,
+                    lineHeight: 1.7,
+                    resize: 'none',
+                    outline: 'none',
+                  }}
+                />
               </div>
-              <textarea
-                value={polished}
-                onChange={(e) => setPolished(e.target.value)}
-                placeholder={polished ? '' : '润色结果将显示在这里，支持手动编辑...'}
-                style={{ width: '100%', padding: '16px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none', minHeight: '360px', resize: 'vertical', fontFamily: 'monospace', lineHeight: 1.6, boxSizing: 'border-box' }}
-              />
-            </div>
+              <button
+                onClick={handleApply}
+                style={{
+                  padding: '10px 0',
+                  background: '#10b981',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                ✅ 应用到章节
+              </button>
+            </>
           )}
         </div>
       </div>
-    </PageWrapper>
+    </div>
   )
 }
