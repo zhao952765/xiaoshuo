@@ -10,7 +10,7 @@
 
 import React, { useState, useCallback, useEffect } from 'react'
 import { useStore } from '../../store'
-import type { AIModel, AIModelType } from '../../../config/types'
+import type { AIModel, AIModelType } from '../types/types'
 
 interface ModelPreset {
   type: AIModelType

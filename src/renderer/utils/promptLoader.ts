@@ -1,11 +1,11 @@
 /**
  * 提示词加载工具
- * 编译时自动导入 src/config/prompts/ 目录下所有 .md 提示词文件
+ * 编译时自动导入 prompts/ 目录下所有 .md 提示词文件
  * 100% 原样使用，不做任何修改
  */
 
 // Vite 编译时 glob 导入：所有 .md 文件以原始字符串形式加载
-const rawModules = import.meta.glob('../../config/prompts/*.md', {
+const rawModules = import.meta.glob('@prompts/*.md', {
   eager: true,
   query: '?raw',
   import: 'default',

@@ -16,7 +16,7 @@
  *   deduceTransformer.ts 负责「原始JSON → 前端可视化数据」
  */
 
-import type { Character, WorldSetting } from '../../config/types'
+import type { Character, WorldSetting } from '../types/types'
 import { parseMarkdownFields, cleanMarkdown } from './markdownParser'
 
 // ==================== P0: isTitleLine 改进版 ====================
@@ -30,15 +30,28 @@ import { parseMarkdownFields, cleanMarkdown } from './markdownParser'
  */
 export function isTitleLine(line: string): boolean {
   const trimmed = line.trim()
-  return (
+  if (!trimmed) return false
+
+  // 严格模式：只匹配格式化标题，不匹配纯文本短行
+  if (
     /^【/.test(trimmed) ||               // 【小说标题】
     /^#{1,4}\s/.test(trimmed) ||         // ## 小说标题
-    /^\*\*/.test(trimmed) ||              // **小说标题**
+    /^\*\*[^*]/.test(trimmed) ||          // **小说标题**（至少有一个非*字符）
     /^\d+[.、．\s]/.test(trimmed) ||      // 1. 小说标题
-    /^第[一二三四五六七八九十\d]+[章节卷]/.test(trimmed) || // 第一章
-    /^[一二三四五六七八九十]+[、.．]/.test(trimmed) ||      // 一、标题
-    trimmed.length > 0 && trimmed.length < 8  // 极短行（2-7字）可能是标题
-  )
+    /^第[一二三四五六七八九十\d]+[章节卷篇]/.test(trimmed) // 第一章/节/卷/篇
+  ) {
+    return true
+  }
+
+  // 限定条件：中文字符 2-7 字且不含标点，才视为可能的标题
+  const chineseOnly = trimmed.replace(/[^\u4e00-\u9fff]/g, '')
+  if (chineseOnly.length >= 2 && chineseOnly.length <= 7 && chineseOnly === trimmed.replace(/\s/g, '')) {
+    // 排除常见非标题词汇
+    const nonTitle = /^(?:姓名|名字|性别|年龄|职业|外貌|性格|背景|能力|目标|关系|描述|介绍|设定|总结|备注|备注|说明)$/
+    return !nonTitle.test(chineseOnly)
+  }
+
+  return false
 }
 
 // ==================== 两遍扫描法字段定义 ====================
@@ -372,48 +385,53 @@ export function parseSupportingChars(text: string, now: number, defaultGender?: 
     entries = text.split(/\n\s*\n/).filter(Boolean);
   }
 
+  // 过滤无意义条目
+  entries = entries.filter((e) => {
+    const t = e.trim()
+    if (!t) return false
+    if (t.length < 4) return false // 太短的无意义
+    if (/^第[一二三四五六七八九十\d]+[章节卷]/.test(t)) return false // 章节标题
+    if (/^#{1,4}\s/.test(t)) return false // markdown 标题
+    return true
+  })
+
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i].trim();
     if (!entry) continue;
 
     // 提取姓名（多种策略）
     let name = '';
+    const firstLine = entry.split('\n')[0].trim();
 
     // 策略A: **名字** 格式
-    const mdNameMatch = entry.match(/^\s*\*\*(?:\d+\.\s*)?([^*]+?)\*\*/);
+    const mdNameMatch = firstLine.match(/^\s*\*\*(?:\d+\.\s*)?([^*]+?)\*\*/);
     if (mdNameMatch) {
       name = cleanMarkdown(mdNameMatch[1]).trim();
     }
 
-    // 策略B: 数字. 名字 格式（修复：排除 markdown 标题符号 ###）
+    // 策略B: 数字. 名字 格式
     if (!name) {
-      const numNameMatch = entry.match(/^\s*\d+[\.、．]\s*([^\n#：:\-——]{2,10})/);
+      const numNameMatch = entry.match(/^\s*\d+[\.、．]\s*([^\n#：:\-——（）()]{2,10})/);
       if (numNameMatch) {
         name = numNameMatch[1].trim().replace(/^#+\s*/, '').trim();
       }
     }
 
-    // 策略B-2: 数字. ### 名字（配角） 格式
+    // 策略C: 行首纯文本短名（2-4字中文，不包含非名字关键词）
     if (!name) {
-      const hashNameMatch = entry.match(/^\s*\d+[\.、．]\s*#{1,4}\s*([^\n（(]{2,10})/);
-      if (hashNameMatch) {
-        name = hashNameMatch[1].trim();
+      const clean = cleanMarkdown(firstLine)
+        .replace(/^[-•·\s\d.、．#]+/, '')
+        .replace(/[（(].*?[)）]/, '')
+        .trim()
+      // 只取首词，限定为纯中文名 2-4 字
+      const word = clean.split(/[，,、\s]/)[0]
+      if (word && /^[\u4e00-\u9fff]{2,4}$/.test(word) &&
+          !/^(?:设定|介绍|描述|性格|外貌|背景|姓名|性别|年龄|能力|备注)$/.test(word)) {
+        name = word
       }
     }
 
-    // 策略C: 行首短名（过滤掉 markdown 标题和纯符号）
-    if (!name) {
-      const firstLine = entry.split('\n')[0].trim();
-      const clean = cleanMarkdown(firstLine)
-        .replace(/^#+\s*/, '')        // 去掉开头的 #
-        .replace(/^\d+[\.、．]\s*/, '') // 去掉数字序号
-        .replace(/[（(].*?[)）]/, '')  // 去掉括号备注
-        .trim();
-      const words = clean.split(/[，,、\s]/).filter(w => w.length >= 2 && w.length <= 6 && !/^#+$/.test(w));
-      name = words[0] || '';
-    }
-
-    if (!name || name.length < 2 || name.length > 10 || /^#+$/.test(name)) continue;
+    if (!name || name.length < 2 || name.length > 10) continue;
 
     // 提取字段（使用 parseMarkdownFields + 正则回退）
     const fields = parseMarkdownFields(entry);
@@ -576,10 +594,12 @@ function extractSubSection(text: string, titles: string[]): string {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim()
       if (!line) continue
-      // 放宽匹配：标题行或包含关键字的行（兼容 ### 历史 这种子标题）
-      const isTitleMatch = (isTitleLine(line) || /^#{1,4}\s/.test(line)) && line.includes(title)
-      if (!isTitleMatch && !line.includes(title)) continue
-      if (!isTitleMatch && !line.match(new RegExp(`(?:^|#{1,4}\\s|【|\\*\\*)\\s*${title}`))) continue
+      // 检测是否为包含关键字的标题行（兼容 ### 历史 / **历史** 等格式）
+      const isTitle = line.includes(title) && (
+        isTitleLine(line) || /^#{1,4}\s/.test(line) || 
+        new RegExp(`(?:^|#{1,4}\\s|【|\\*\\*)\\s*${title}`).test(line)
+      )
+      if (!isTitle) continue
 
       // 找到标题行，提取后续内容直到下一个标题行
       const endIdx = findNextTitleLine(lines, i + 1)

@@ -24,20 +24,24 @@ export function parseMarkdownFields(text: string): Record<string, string> {
     '内心', '内心世界', '内心独白',
     '声音', '语言风格', '口头禅',
   ];
+  const knownFieldSet = new Set(knownFields);
 
-  // ── 策略1: 匹配 **字段名**：内容（markdown 加粗格式）──
-  const mdRegex = /\*\*([^*]+?)\*\*[：:\s]*\n?([\s\S]*?)(?=(?:\n\s*\*\*[^*]+?\*\*[：:\s])|$)/g;
-  let match;
-  while ((match = mdRegex.exec(text)) !== null) {
-    const key = match[1].trim();
-    let value = match[2].trim().replace(/\*\*/g, '').trim();
-    if (key && value) {
-      fields[key] = value;
+  // ── 策略1: 匹配 **字段名**：内容 或 **字段名**  内容（markdown 加粗格式）──
+  // 修复：使用非贪婪匹配 + 明确的下一个字段边界，避免超范围匹配
+  const mdBlocks = text.split(/\n(?=\s*\*\*[^*]+\*\*[：:\s])/);
+  for (const block of mdBlocks) {
+    const mdMatch = block.match(/^\s*\*\*([^*]+?)\*\*\s*[：:\s]*\n?([\s\S]*)$/);
+    if (mdMatch) {
+      const key = mdMatch[1].trim();
+      const value = mdMatch[2].trim().replace(/\*\*/g, '').trim();
+      if (key && value) {
+        fields[key] = value;
+        continue;
+      }
     }
   }
 
-  // ── 策略2: 按行扫描，匹配各种字段格式 ──
-  // 修复核心：兼容 "  性别：男"（缩进）、"- 姓名：xxx"（列表）、"性格：xxx"（纯文本）
+  // ── 策略2: 按行扫描 ──
   const lines = text.split('\n');
   let currentKey: string | null = null;
   let currentValue: string[] = [];
@@ -55,15 +59,15 @@ export function parseMarkdownFields(text: string): Record<string, string> {
 
   for (const rawLine of lines) {
     const line = rawLine.trimEnd();
+    if (line.startsWith('**') && line.includes('**')) continue // 策略1已处理，跳过
 
-    // 匹配字段行：可选前导空格/列表标记 + 字段名 + 分隔符
-    // 示例："  性别：男"、"- 姓名：林默"、"性格：温和"
-    const fieldMatch = line.match(/^(?:\s*[-•·]\s+|\s*\*\*)?\s*([^*：:\n]{1,10})[：:\s]+(.*)$/);
+    // 修复：放宽字段行匹配规则，兼容 "姓名: 张三"（无空格）、"姓名：张三"（中文冒号）
+    const fieldMatch = line.match(/^(?:\s*[-•·]\s+|\s*)\s*([^\s：:\n]{1,10})\s*[：:]\s*(.*)$/);
     if (fieldMatch) {
       const possibleKey = fieldMatch[1].trim();
       const rest = fieldMatch[2].trim();
 
-      if (knownFields.includes(possibleKey)) {
+      if (knownFieldSet.has(possibleKey)) {
         flushField();
         currentKey = possibleKey;
         if (rest) currentValue.push(rest);
@@ -71,20 +75,30 @@ export function parseMarkdownFields(text: string): Record<string, string> {
       }
     }
 
-    // 不是字段行，如果正在收集某个字段的内容，追加
+    // 不是字段行，如果正在收集字段内容则追加
     if (currentKey !== null) {
-      if (line.trim() === '') {
-        if (currentValue.length > 0 && currentValue[currentValue.length - 1].trim() === '') {
-          flushField();
-        } else {
-          currentValue.push(line);
-        }
-      } else {
-        currentValue.push(line);
-      }
+      currentValue.push(line);
     }
   }
   flushField();
+
+  // ── 策略3: 后备 - 对于完全没有已知字段的纯段落文本，尝试按段落分割 ──
+  if (Object.keys(fields).length === 0 && text.trim()) {
+    // 尝试提取姓名（在纯段落中找首个2-4字中文名）
+    const nameMatch = text.match(/^[#*【】\s]*([\u4e00-\u9fff]{2,4})/);
+    if (nameMatch) fields['姓名'] = nameMatch[1];
+
+    // 尝试提取年龄
+    const ageMatch = text.match(/(\d{1,2})\s*岁/);
+    if (ageMatch) fields['年龄'] = ageMatch[1] + '岁';
+
+    // 尝试提取性别
+    if (/[他她]/.test(text) || /男/.test(text)) fields['性别'] = '男';
+    else if (/女/.test(text)) fields['性别'] = '女';
+
+    // 将全文作为外貌（角色介绍段落）
+    fields['外貌'] = text.replace(/^[#*【】\s]+/, '').trim();
+  }
 
   return fields;
 }

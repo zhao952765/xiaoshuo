@@ -6,8 +6,8 @@
  */
 
 import React, { useState } from 'react'
-import { useStore } from '../../store'
-import type { Character } from '../../../config/types'
+import { useStore } from '../store'
+import type { Character } from '../types/types'
 
 interface NSFWFormData {
   bodyType: string

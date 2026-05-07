@@ -12,8 +12,11 @@
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
-    "pack": "electron-builder"
+    "build": "vite build",
+    "preview": "vite preview",
+    "pack": "electron-builder",
+    "pack:win": "electron-builder --win --x64",
+    "pack:portable": "electron-builder --win --x64 portable"
   },
   "build": {
     "appId": "com.private.novel.studio",

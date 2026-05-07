@@ -1,15 +1,15 @@
 @echo off
 chcp 65001 >nul
-title 小说项目 GitHub 精简备份
+title 小说项目 GitHub 精简备份（优化版）
 
 setlocal enabledelayedexpansion
 
-:: ========== 已适配你的项目路径 ==========
+:: ========== 路径配置（按你本地实际路径修改） ==========
 set "SRC=F:\1\xiaoshuo"
 set "DEST_ROOT=F:\1\上传"
-:: ========================================
+:: =====================================================
 
-:: 生成纯数字时间戳（避免中文乱码）
+:: 生成纯数字时间戳
 set "y=%date:~0,4%"
 set "m=%date:~5,2%"
 set "d=%date:~8,2%"
@@ -20,22 +20,25 @@ if "%h%"==" " set h=00
 set "BAK_DIR=%DEST_ROOT%\xiaoshuo_github_bak_%y%%m%%d%_%h%%mi%%s%"
 
 echo ==============================================
-echo 正在执行 GitHub 精简备份
+echo 正在执行 GitHub 精简备份（优化版）
 echo 源目录：%SRC%
 echo 备份目录：%BAK_DIR%
 echo ==============================================
-echo 自动排除：node_modules、logs、out、.vscode 等无用文件
-echo 自动保留：所有源码、配置文件、prompts.json 等
+echo 自动排除：node_modules、构建产物、缓存、日志等
+echo 仅保留：源码、配置、文档、静态资源
 echo.
 
-:: Robocopy 命令：只复制必要文件，自动过滤垃圾
-robocopy "%SRC%" "%BAK_DIR%" /E /XD node_modules logs out .vscode /XF *.log *.tmp Thumbs.db .DS_Store /R:2 /W:2 /NDL /NFL
+:: Robocopy 优化过滤规则
+robocopy "%SRC%" "%BAK_DIR%" /E ^
+/XD node_modules dist out logs .vscode .idea .git .github ^
+/XF *.log *.tmp *.bak *.swp Thumbs.db .DS_Store *.tsbuildinfo ^
+/R:2 /W:2 /NDL /NFL
 
 echo.
 echo ==============================================
 echo ✅ 备份完成！
 echo 备份文件已保存到：%BAK_DIR%
-echo 该目录已过滤无用文件，可直接上传 GitHub
+echo 该目录已过滤所有无用文件，可直接上传 GitHub
 echo ==============================================
 echo.
 
