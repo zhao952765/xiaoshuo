@@ -19,7 +19,7 @@ import { useState, useCallback, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAppStore } from '../../store'
 import PageWrapper from '../../components/PageWrapper'
-import type { Character, RoleType } from '../../../config/types'
+import type { Character, RoleType } from '@cfg/types'
 import {
   CHARACTER_ROLE_CONFIG,
   ROLE_KEYS,

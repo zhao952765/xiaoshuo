@@ -5,7 +5,7 @@
  * 供组件和工具函数共享使用
  */
 
-import type { NovelLength } from '../../../config/types'
+import type { NovelLength } from '@cfg/types'
 
 // ==================== 长度选项卡片 ====================
 

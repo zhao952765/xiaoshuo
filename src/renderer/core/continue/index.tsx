@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo } from 'react'
 import { useAppStore } from '../../store'
 import { loadPrompt } from '../../utils/promptLoader'
 import PageWrapper from '../../components/PageWrapper'
-import type { AIModel } from '../../../config/types'
+import type { AIModel } from '@cfg/types'
 
 // ==========================================
 // 工具

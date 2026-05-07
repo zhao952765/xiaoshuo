@@ -8,7 +8,7 @@
  * - 现有项目 relationships 是结构化数组，新组件是纯文本
  */
 
-import type { RoleType } from '../../config/types'
+import type { RoleType } from '@cfg/types'
 
 // ==========================================
 // 角色类型配置（4种，兼容现有 RoleType）

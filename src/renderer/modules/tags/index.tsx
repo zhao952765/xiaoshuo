@@ -7,7 +7,7 @@
 
 import React, { useState, useMemo, useCallback } from 'react'
 import { useStore } from '../../store'
-import type { Tag, TagCategory } from '../../../config/types'
+import type { Tag, TagCategory } from '@cfg/types'
 
 const CATEGORY_CONFIG: Record<TagCategory | 'plot' | 'emotion' | 'erotic' | 'relation' | 'world' | 'style' | 'custom', {
   label: string

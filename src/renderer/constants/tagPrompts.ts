@@ -1,4 +1,4 @@
-import type { TagCategory } from '../../config/types'
+import type { TagCategory } from '@cfg/types'
 
 export const TAG_CATEGORY_CONFIG: Record<TagCategory, { label: string; color: string; icon: string; description: string; isHighlight?: boolean }> = {
   character: { label: '人物类型', color: '#8b5cf6', icon: '👤', description: '角色类型、性格、外貌特征' },

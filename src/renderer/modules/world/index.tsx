@@ -1,62 +1,26 @@
-import { useState, useCallback, useMemo } from 'react'
+/**
+ * 世界观管理 - 修复版
+ * - URL.revokeObjectURL 防止内存泄漏
+ * - 使用共享 UI 组件
+ */
+import { useState, useCallback, useMemo, useRef } from 'react'
 import { useAppStore } from '../../store'
 import PageWrapper from '../../components/PageWrapper'
-import type { WorldSetting, WorldType } from '../../../config/types'
+import { Card, Btn, Input, Textarea, Badge, Empty, Modal, Divider } from '../../components/ui'
+import type { WorldSetting, WorldType } from '@cfg/types'
 
-// ==========================================
-// 工具
-// ==========================================
-
-const genId = (): string =>
-  `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+const genId = (): string => `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 
 const worldTypeLabel: Record<WorldType, string> = {
-  campus: '校园',
-  urban: '都市',
-  apocalypse: '末世',
-  fantasy: '奇幻',
-  scifi: '科幻',
-  xuanhuan: '玄幻',
-  historical: '历史',
-  wuxia: '武侠',
-  custom: '自定义',
+  campus: '校园', urban: '都市', apocalypse: '末世', fantasy: '奇幻',
+  scifi: '科幻', xuanhuan: '玄幻', historical: '历史', wuxia: '武侠', custom: '自定义',
 }
-
 const worldTypeColor: Record<WorldType, string> = {
-  campus: '#3b82f6',
-  urban: '#64748b',
-  apocalypse: '#ef4444',
-  fantasy: '#8b5cf6',
-  scifi: '#06b6d4',
-  xuanhuan: '#f59e0b',
-  historical: '#a16207',
-  wuxia: '#10b981',
-  custom: '#888',
+  campus: '#3b82f6', urban: '#64748b', apocalypse: '#ef4444', fantasy: '#8b5cf6',
+  scifi: '#06b6d4', xuanhuan: '#a855f7', historical: '#f59e0b', wuxia: '#10b981', custom: '#6b7280',
 }
 
-function createEmptyWorld(): WorldSetting {
-  return {
-    id: genId(),
-    name: '',
-    worldType: 'custom',
-    description: '',
-    overview: '',
-    rules: [],
-    locations: [],
-    timeline: [],
-    society: '',
-    culture: '',
-    economy: '',
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  }
-}
-
-// ==========================================
-// 主组件
-// ==========================================
-
-export default function WorldManagePage() {
+export default function WorldPage() {
   const worldSettings = useAppStore((s) => s.worldSettings)
   const currentNovel = useAppStore((s) => s.currentNovel)
   const addWorldSetting = useAppStore((s) => s.addWorldSetting)
@@ -66,396 +30,153 @@ export default function WorldManagePage() {
 
   const [search, setSearch] = useState('')
   const [filterType, setFilterType] = useState<WorldType | 'all'>('all')
-  const [showForm, setShowForm] = useState(false)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const [deleteTargetId, setDeleteTargetId] = useState('')
-
-  // 表单状态
-  const [form, setForm] = useState<WorldSetting>(createEmptyWorld())
-
-  // 动态子项编辑状态
-  const [ruleForm, setRuleForm] = useState({ name: '', description: '' })
-  const [locForm, setLocForm] = useState({
-    name: '',
-    type: '',
-    description: '',
-  })
-  const [timeForm, setTimeForm] = useState({
-    era: '',
-    title: '',
-    description: '',
-  })
+  const [editing, setEditing] = useState<WorldSetting | null>(null)
+  const [isNew, setIsNew] = useState(false)
+  const [form, setForm] = useState<Partial<WorldSetting>>({})
 
   const filtered = useMemo(() => {
-    let list = [...worldSettings]
-    if (search.trim()) {
-      const s = search.trim().toLowerCase()
-      list = list.filter(
-        (w) =>
-          w.name.toLowerCase().includes(s) ||
-          w.description.toLowerCase().includes(s) ||
-          w.overview.toLowerCase().includes(s)
-      )
-    }
-    if (filterType !== 'all') {
-      list = list.filter((w) => w.worldType === filterType)
-    }
+    let list = worldSettings
+    if (search) list = list.filter((w) => w.name.includes(search) || w.overview.includes(search))
+    if (filterType !== 'all') list = list.filter((w) => w.worldType === filterType)
     return list
   }, [worldSettings, search, filterType])
 
-  const stats = useMemo(() => {
-    return {
-      total: worldSettings.length,
-      hasRules: worldSettings.filter((w) => w.rules.length > 0).length,
-      hasLocations: worldSettings.filter((w) => w.locations.length > 0).length,
-      hasTimeline: worldSettings.filter((w) => w.timeline.length > 0).length,
-    }
-  }, [worldSettings])
-
-  const openCreate = useCallback(() => {
-    setForm(createEmptyWorld())
-    setEditingId(null)
-    setShowForm(true)
-    setRuleForm({ name: '', description: '' })
-    setLocForm({ name: '', type: '', description: '' })
-    setTimeForm({ era: '', title: '', description: '' })
+  const openNew = useCallback(() => {
+    setIsNew(true)
+    setEditing(null)
+    setForm({
+      id: genId(), name: '', worldType: 'custom', description: '', overview: '', rules: [], locations: [], timeline: [],
+      society: '', culture: '', economy: '', createdAt: Date.now(), updatedAt: Date.now(),
+    })
   }, [])
 
   const openEdit = useCallback((ws: WorldSetting) => {
+    setIsNew(false)
+    setEditing(ws)
     setForm({ ...ws })
-    setEditingId(ws.id)
-    setShowForm(true)
-    setRuleForm({ name: '', description: '' })
-    setLocForm({ name: '', type: '', description: '' })
-    setTimeForm({ era: '', title: '', description: '' })
-  }, [])
-
-  const closeForm = useCallback(() => {
-    setShowForm(false)
-    setEditingId(null)
   }, [])
 
   const handleSave = useCallback(() => {
-    if (!form.name.trim()) {
-      addLog({ type: 'warn', message: '世界观名称不能为空', detail: '' })
-      return
+    if (!form.name?.trim()) return
+    if (isNew) {
+      addWorldSetting(form as WorldSetting)
+      addLog({ type: 'success', message: '新增世界观', detail: form.name })
+    } else if (editing) {
+      updateWorldSetting(editing.id, form)
+      addLog({ type: 'success', message: '更新世界观', detail: form.name })
     }
-    const toSave: WorldSetting = {
-      ...form,
-      updatedAt: Date.now(),
-    }
-    if (editingId) {
-      updateWorldSetting(editingId, toSave)
-      addLog({ type: 'success', message: '世界观已更新', detail: toSave.name })
-    } else {
-      addWorldSetting(toSave)
-      if (currentNovel) {
-        const novelWs = [...currentNovel.worldSettings, toSave.id]
-        useAppStore.getState().updateNovel({ worldSettings: novelWs })
-      }
-      addLog({ type: 'success', message: '世界观已创建', detail: toSave.name })
-    }
-    setShowForm(false)
-    setEditingId(null)
-  }, [form, editingId, addWorldSetting, updateWorldSetting, currentNovel, addLog])
+    setEditing(null)
+  }, [form, isNew, editing, addWorldSetting, updateWorldSetting, addLog])
 
-  const confirmDelete = useCallback((id: string) => {
-    setDeleteTargetId(id)
-    setShowDeleteConfirm(true)
-  }, [])
-
-  const executeDelete = useCallback(() => {
-    const id = deleteTargetId
-    const target = worldSettings.find((w) => w.id === id)
-    if (!target) return
+  const handleDelete = useCallback((id: string, name: string) => {
+    if (!confirm(`确定删除世界观「${name}」吗？`)) return
     removeWorldSetting(id)
-    addLog({
-      type: 'success',
-      message: '世界观已删除',
-      detail: target.name,
-    })
-    setShowDeleteConfirm(false)
-    setDeleteTargetId('')
-  }, [deleteTargetId, worldSettings, removeWorldSetting, addLog])
+    addLog({ type: 'warn', message: '删除世界观', detail: name })
+  }, [removeWorldSetting, addLog])
 
-  // ----- 动态子项增删 -----
+  const handleExport = useCallback(() => {
+    const data = JSON.stringify(worldSettings, null, 2)
+    const blob = new Blob([data], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `world_settings_${Date.now()}.json`; a.click()
+    URL.revokeObjectURL(url) // 修复：防止内存泄漏
+    addLog({ type: 'success', message: '导出世界观数据', detail: `${worldSettings.length} 条` })
+  }, [worldSettings, addLog])
 
-  const addRule = useCallback(() => {
-    if (!ruleForm.name.trim()) return
-    setForm((prev) => ({
-      ...prev,
-      rules: [
-        ...prev.rules,
-        {
-          name: ruleForm.name.trim(),
-          description: ruleForm.description.trim(),
-          scope: '',
-          limit: '',
-          sideEffect: '',
-        },
-      ],
-    }))
-    setRuleForm({ name: '', description: '' })
-  }, [ruleForm])
-
-  const removeRule = useCallback((idx: number) => {
-    setForm((prev) => ({ ...prev, rules: prev.rules.filter((_, i) => i !== idx) }))
-  }, [])
-
-  const addLocation = useCallback(() => {
-    if (!locForm.name.trim()) return
-    setForm((prev) => ({
-      ...prev,
-      locations: [
-        ...prev.locations,
-        {
-          name: locForm.name.trim(),
-          type: locForm.type.trim(),
-          description: locForm.description.trim(),
-          atmosphere: '',
-          scenes: [],
-        },
-      ],
-    }))
-    setLocForm({ name: '', type: '', description: '' })
-  }, [locForm])
-
-  const removeLocation = useCallback((idx: number) => {
-    setForm((prev) => ({
-      ...prev,
-      locations: prev.locations.filter((_, i) => i !== idx),
-    }))
-  }, [])
-
-  const addTimeline = useCallback(() => {
-    if (!timeForm.title.trim()) return
-    setForm((prev) => ({
-      ...prev,
-      timeline: [
-        ...prev.timeline,
-        {
-          era: timeForm.era.trim(),
-          title: timeForm.title.trim(),
-          description: timeForm.description.trim(),
-          impact: '',
-        },
-      ],
-    }))
-    setTimeForm({ era: '', title: '', description: '' })
-  }, [timeForm])
-
-  const removeTimeline = useCallback((idx: number) => {
-    setForm((prev) => ({
-      ...prev,
-      timeline: prev.timeline.filter((_, i) => i !== idx),
-    }))
-  }, [])
+  const a = '#FF4D94'
 
   return (
     <PageWrapper
-      title="世界观管理"
-      subtitle="管理小说世界观设定，规则、地点与时间线实时同步全局"
-      actions={
-        <button onClick={openCreate} style={{ background: '#6366f1', color: '#fff', border: 'none', borderRadius: '8px', padding: '8px 16px', fontSize: '14px', cursor: 'pointer' }}>
-          + 新建世界观
-        </button>
-      }
+      title="🌍 世界观管理"
+      subtitle={`共 ${worldSettings.length} 个世界观设定`}
+      actions={<Btn variant="primary" size="sm" onClick={openNew}>➕ 新增</Btn>}
     >
-      {/* 统计 */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
-        {[
-          { label: '总世界观', value: stats.total, color: '#e0e0e0' },
-          { label: '有规则', value: stats.hasRules, color: '#6366f1' },
-          { label: '有地理', value: stats.hasLocations, color: '#10b981' },
-          { label: '有历史', value: stats.hasTimeline, color: '#f59e0b' },
-        ].map((s) => (
-          <div key={s.label} style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '12px', padding: '16px' }}>
-            <div style={{ fontSize: '24px', fontWeight: 'bold', color: s.color }}>{s.value}</div>
-            <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>{s.label}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* 工具栏 */}
-      <div style={{ display: 'flex', gap: '12px' }}>
-        <input
-          type="text" value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="搜索世界观名称、描述..."
-          style={{ flex: 1, padding: '10px 14px', background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none' }}
-        />
-        <select
-          value={filterType}
-          onChange={(e) => setFilterType(e.target.value as WorldType | 'all')}
-          style={{ padding: '10px 14px', background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none' }}
-        >
-          <option value="all">全部类型</option>
-          {(Object.keys(worldTypeLabel) as WorldType[]).map((t) => <option key={t} value={t}>{worldTypeLabel[t]}</option>)}
-        </select>
+      {/* 搜索 & 筛选 */}
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input placeholder="搜索世界观…" value={search} onChange={(e) => setSearch(e.target.value)}
+          style={{ flex: 1, minWidth: 200, padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '6px', color: '#f0f0f0', fontSize: '13px', outline: 'none' }} />
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {(['all', ...Object.keys(worldTypeLabel)] as const).map((t) => (
+            <button key={t} onClick={() => setFilterType(t as any)}
+              style={{ padding: '4px 12px', borderRadius: '9999px', fontSize: '11px', cursor: 'pointer', border: filterType === t ? `1px solid ${a}` : '1px solid #333', background: filterType === t ? `${a}18` : '#1a1a1a', color: filterType === t ? a : '#888', transition: 'all 0.15s' }}>
+              {t === 'all' ? '全部' : worldTypeLabel[t as WorldType]}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* 列表 */}
       {filtered.length === 0 ? (
-        <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '12px', padding: '16px' }}>
-          <div style={{ fontSize: '14px', color: '#666' }}>
-            {worldSettings.length === 0 ? '暂无世界观，点击上方按钮创建' : '没有匹配的世界观'}
-          </div>
-        </div>
+        <Empty icon="🌍" message={worldSettings.length === 0 ? '暂无世界观设定' : '没有匹配的结果'} submessage="点击右上角新增" />
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
           {filtered.map((ws) => (
-            <div
-              key={ws.id}
-              onClick={() => openEdit(ws)}
-              style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '12px', padding: '16px', cursor: 'pointer' }}
-            >
-              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <div style={{ fontSize: '16px', fontWeight: 500, color: '#e0e0e0' }}>{ws.name}</div>
-                  <span style={{ fontSize: '12px', padding: '2px 8px', borderRadius: '8px', border: `1px solid ${worldTypeColor[ws.worldType]}40`, color: worldTypeColor[ws.worldType], background: `${worldTypeColor[ws.worldType]}15` }}>
-                    {worldTypeLabel[ws.worldType]}
-                  </span>
+            <div key={ws.id} style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '12px', padding: '16px', cursor: 'pointer', transition: 'border-color 0.2s' }}
+              onClick={() => openEdit(ws)}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontSize: '14px', fontWeight: 600, color: '#f0f0f0' }}>{ws.name}</div>
+                  <Badge color={worldTypeColor[ws.worldType]} bgColor={`${worldTypeColor[ws.worldType]}20`}>{worldTypeLabel[ws.worldType]}</Badge>
                 </div>
-                <button
-                  onClick={(e) => { e.stopPropagation(); confirmDelete(ws.id) }}
-                  style={{ color: '#f87171', border: 'none', background: 'none', cursor: 'pointer', fontSize: '12px' }}
-                >
-                  删除
-                </button>
+                <button onClick={(e) => { e.stopPropagation(); handleDelete(ws.id, ws.name) }}
+                  style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '16px', padding: 2 }}>×</button>
               </div>
-              <p style={{ fontSize: '14px', color: '#888', margin: '0 0 12px', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                {ws.description || ws.overview || '暂无描述'}
-              </p>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', fontSize: '12px', color: '#666' }}>
-                {ws.rules.length > 0 && <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#6366f1' }} />{ws.rules.length} 条规则</span>}
-                {ws.locations.length > 0 && <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} />{ws.locations.length} 个地点</span>}
-                {ws.timeline.length > 0 && <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#f59e0b' }} />{ws.timeline.length} 个历史事件</span>}
-                {ws.society && <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#888' }} />社会</span>}
+              <div style={{ fontSize: '12px', color: '#888', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                {ws.overview || ws.description || '暂无简介'}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                {ws.rules.length > 0 && <Badge color="#f59e0b">📏 {ws.rules.length} 规则</Badge>}
+                {ws.locations.length > 0 && <Badge color="#3b82f6">📍 {ws.locations.length} 地点</Badge>}
+                {ws.timeline.length > 0 && <Badge color="#10b981">📅 {ws.timeline.length} 事件</Badge>}
               </div>
             </div>
           ))}
         </div>
       )}
 
-      {/* 编辑/创建弹窗 */}
-      {showForm && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#00000099', padding: '16px' }}>
-          <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '12px', width: '100%', maxWidth: '672px', maxHeight: '90vh', overflow: 'auto' }}>
-            <div style={{ position: 'sticky', top: 0, background: '#1a1a1a', borderBottom: '1px solid #2a2a2a', padding: '16px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 10 }}>
-              <div style={{ fontSize: '16px', fontWeight: 500, color: '#e0e0e0' }}>{editingId ? '编辑世界观' : '新建世界观'}</div>
-              <button onClick={closeForm} style={{ color: '#666', border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer' }}>×</button>
-            </div>
-            <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <div>
-                  <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>名称 *</div>
-                  <input value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} style={{ width: '100%', padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>类型</div>
-                  <select value={form.worldType} onChange={(e) => setForm((p) => ({ ...p, worldType: e.target.value as WorldType }))} style={{ width: '100%', padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }}>
-                    {(Object.keys(worldTypeLabel) as WorldType[]).map((t) => <option key={t} value={t}>{worldTypeLabel[t]}</option>)}
-                  </select>
-                </div>
-              </div>
-              <div>
-                <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>简介</div>
-                <input value={form.description} onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))} style={{ width: '100%', padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
-              </div>
-              <div>
-                <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>概述</div>
-                <textarea value={form.overview} onChange={(e) => setForm((p) => ({ ...p, overview: e.target.value }))} rows={3} style={{ width: '100%', padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
-              </div>
-              <div style={{ border: '1px solid #2a2a2a', borderRadius: '8px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <div style={{ fontSize: '14px', fontWeight: 500, color: '#ccc' }}>规则设定</div>
-                {form.rules.length === 0 && <div style={{ fontSize: '12px', color: '#666' }}>暂无规则</div>}
-                {form.rules.map((r, idx) => (
-                  <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', background: '#0f0f0f', borderRadius: '8px', padding: '8px 12px' }}>
-                    <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: '14px', color: '#e0e0e0' }}>{r.name}</div><div style={{ fontSize: '12px', color: '#888' }}>{r.description}</div></div>
-                    <button onClick={() => removeRule(idx)} style={{ fontSize: '12px', color: '#f87171', border: 'none', background: 'none', cursor: 'pointer' }}>移除</button>
-                  </div>
-                ))}
-                <div style={{ display: 'flex', gap: '8px', paddingTop: '8px', borderTop: '1px solid #2a2a2a' }}>
-                  <input value={ruleForm.name} onChange={(e) => setRuleForm((p) => ({ ...p, name: e.target.value }))} placeholder="规则名称" style={{ flex: 1, padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none' }} />
-                  <input value={ruleForm.description} onChange={(e) => setRuleForm((p) => ({ ...p, description: e.target.value }))} placeholder="描述" style={{ flex: 2, padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none' }} />
-                  <button onClick={addRule} disabled={!ruleForm.name.trim()} style={{ background: '#6366f1', color: '#fff', border: 'none', borderRadius: '8px', padding: '8px 16px', fontSize: '14px', cursor: 'pointer', opacity: ruleForm.name.trim() ? 1 : 0.4 }}>添加</button>
-                </div>
-              </div>
-              <div style={{ border: '1px solid #2a2a2a', borderRadius: '8px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <div style={{ fontSize: '14px', fontWeight: 500, color: '#ccc' }}>地点设定</div>
-                {form.locations.length === 0 && <div style={{ fontSize: '12px', color: '#666' }}>暂无地点</div>}
-                {form.locations.map((l, idx) => (
-                  <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', background: '#0f0f0f', borderRadius: '8px', padding: '8px 12px' }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: '14px', color: '#e0e0e0' }}>{l.name}{l.type && <span style={{ fontSize: '12px', color: '#6366f1', marginLeft: '8px' }}>{l.type}</span>}</div>
-                      <div style={{ fontSize: '12px', color: '#888' }}>{l.description}</div>
-                    </div>
-                    <button onClick={() => removeLocation(idx)} style={{ fontSize: '12px', color: '#f87171', border: 'none', background: 'none', cursor: 'pointer' }}>移除</button>
-                  </div>
-                ))}
-                <div style={{ display: 'flex', gap: '8px', paddingTop: '8px', borderTop: '1px solid #2a2a2a' }}>
-                  <input value={locForm.name} onChange={(e) => setLocForm((p) => ({ ...p, name: e.target.value }))} placeholder="地点名称" style={{ flex: 1, padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none' }} />
-                  <input value={locForm.type} onChange={(e) => setLocForm((p) => ({ ...p, type: e.target.value }))} placeholder="类型" style={{ width: '96px', padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none' }} />
-                  <input value={locForm.description} onChange={(e) => setLocForm((p) => ({ ...p, description: e.target.value }))} placeholder="描述" style={{ flex: 2, padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none' }} />
-                  <button onClick={addLocation} disabled={!locForm.name.trim()} style={{ background: '#6366f1', color: '#fff', border: 'none', borderRadius: '8px', padding: '8px 16px', fontSize: '14px', cursor: 'pointer', opacity: locForm.name.trim() ? 1 : 0.4 }}>添加</button>
-                </div>
-              </div>
-              <div style={{ border: '1px solid #2a2a2a', borderRadius: '8px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <div style={{ fontSize: '14px', fontWeight: 500, color: '#ccc' }}>历史时间线</div>
-                {form.timeline.length === 0 && <div style={{ fontSize: '12px', color: '#666' }}>暂无历史事件</div>}
-                {form.timeline.map((t, idx) => (
-                  <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', background: '#0f0f0f', borderRadius: '8px', padding: '8px 12px' }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: '14px', color: '#e0e0e0' }}>{t.era && <span style={{ fontSize: '12px', color: '#f59e0b', marginRight: '8px' }}>{t.era}</span>}{t.title}</div>
-                      <div style={{ fontSize: '12px', color: '#888' }}>{t.description}</div>
-                    </div>
-                    <button onClick={() => removeTimeline(idx)} style={{ fontSize: '12px', color: '#f87171', border: 'none', background: 'none', cursor: 'pointer' }}>移除</button>
-                  </div>
-                ))}
-                <div style={{ display: 'flex', gap: '8px', paddingTop: '8px', borderTop: '1px solid #2a2a2a' }}>
-                  <input value={timeForm.era} onChange={(e) => setTimeForm((p) => ({ ...p, era: e.target.value }))} placeholder="时代" style={{ width: '96px', padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none' }} />
-                  <input value={timeForm.title} onChange={(e) => setTimeForm((p) => ({ ...p, title: e.target.value }))} placeholder="事件名称" style={{ flex: 1, padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none' }} />
-                  <input value={timeForm.description} onChange={(e) => setTimeForm((p) => ({ ...p, description: e.target.value }))} placeholder="描述" style={{ flex: 2, padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none' }} />
-                  <button onClick={addTimeline} disabled={!timeForm.title.trim()} style={{ background: '#6366f1', color: '#fff', border: 'none', borderRadius: '8px', padding: '8px 16px', fontSize: '14px', cursor: 'pointer', opacity: timeForm.title.trim() ? 1 : 0.4 }}>添加</button>
-                </div>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
-                <div>
-                  <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>社会结构</div>
-                  <textarea value={form.society} onChange={(e) => setForm((p) => ({ ...p, society: e.target.value }))} rows={3} style={{ width: '100%', padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>文化风俗</div>
-                  <textarea value={form.culture} onChange={(e) => setForm((p) => ({ ...p, culture: e.target.value }))} rows={3} style={{ width: '100%', padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>经济体系</div>
-                  <textarea value={form.economy} onChange={(e) => setForm((p) => ({ ...p, economy: e.target.value }))} rows={3} style={{ width: '100%', padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '8px', color: '#e0e0e0', fontSize: '14px', outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
-                </div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', paddingTop: '8px' }}>
-                <button onClick={closeForm} style={{ background: '#1a1a1a', color: '#e0e0e0', border: '1px solid #2a2a2a', borderRadius: '8px', padding: '8px 16px', fontSize: '14px', cursor: 'pointer' }}>取消</button>
-                <button onClick={handleSave} style={{ background: '#6366f1', color: '#fff', border: 'none', borderRadius: '8px', padding: '8px 16px', fontSize: '14px', cursor: 'pointer' }}>{editingId ? '保存修改' : '创建世界观'}</button>
-              </div>
-            </div>
-          </div>
+      {worldSettings.length > 0 && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <Btn variant="secondary" size="sm" onClick={handleExport}>📤 全部导出 JSON</Btn>
         </div>
       )}
 
-      {/* 删除确认弹窗 */}
-      {showDeleteConfirm && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#00000099', padding: '16px' }}>
-          <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: '12px', width: '100%', maxWidth: '384px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ fontSize: '16px', fontWeight: 500, color: '#e0e0e0' }}>确认删除世界观</div>
-            <div style={{ fontSize: '14px', color: '#888' }}>删除后该世界观将从项目中移除，所有引用它的章节将不再关联此设定，此操作不可撤销。</div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-              <button onClick={() => setShowDeleteConfirm(false)} style={{ background: '#1a1a1a', color: '#e0e0e0', border: '1px solid #2a2a2a', borderRadius: '8px', padding: '8px 16px', fontSize: '14px', cursor: 'pointer' }}>取消</button>
-              <button onClick={executeDelete} style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: '8px', padding: '8px 16px', fontSize: '14px', cursor: 'pointer' }}>确认删除</button>
+      {/* 编辑模态框 */}
+      <Modal open={!!editing || isNew} onClose={() => { setEditing(null); setIsNew(false) }}
+        title={isNew ? '新增世界观' : '编辑世界观'} width="600px">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: 4 }}>名称</label>
+            <input value={form.name || ''} onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="世界观名称" style={{ width: '100%', padding: '8px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '6px', color: '#f0f0f0', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: 4 }}>类型</label>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {(Object.entries(worldTypeLabel) as [WorldType, string][]).map(([key, label]) => (
+                <button key={key} onClick={() => setForm({ ...form, worldType: key })}
+                  style={{ padding: '4px 12px', borderRadius: '9999px', fontSize: '11px', cursor: 'pointer', border: (form.worldType || 'custom') === key ? `1px solid ${worldTypeColor[key]}` : '1px solid #333', background: (form.worldType || 'custom') === key ? `${worldTypeColor[key]}18` : '#1a1a1a', color: (form.worldType || 'custom') === key ? worldTypeColor[key] : '#888' }}>
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: 4 }}>简介</label>
+            <textarea value={form.description || ''} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3}
+              placeholder="简要描述这个世界的核心设定" style={{ width: '100%', padding: '10px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '6px', color: '#f0f0f0', fontSize: '13px', outline: 'none', fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' }} />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: 4 }}>详细世界观概述</label>
+            <textarea value={form.overview || ''} onChange={(e) => setForm({ ...form, overview: e.target.value })} rows={6}
+              placeholder="世界的背景、历史、社会环境、文化风俗…" style={{ width: '100%', padding: '10px 12px', background: '#0f0f0f', border: '1px solid #2a2a2a', borderRadius: '6px', color: '#f0f0f0', fontSize: '13px', outline: 'none', fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' }} />
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <Btn variant="primary" size="md" fullWidth onClick={handleSave}>💾 保存</Btn>
+            <Btn variant="ghost" size="sm" onClick={() => { setEditing(null); setIsNew(false) }}>取消</Btn>
+          </div>
         </div>
-      )}
+      </Modal>
     </PageWrapper>
   )
 }

@@ -2,7 +2,7 @@
  * AI 服务 - 统一流式 & 非流式调用
  * 整合分散在 5 个页面中的重复 SSE 解析代码
  */
-import type { AIModel, AIRequest, AIResponse } from '@/types/types'
+import type { AIModel, AIRequest, AIResponse } from '@cfg/types'
 
 // ============================================
 // 非流式调用（简单请求/响应）

@@ -15,19 +15,19 @@
  */
 
 import React, { useState, useCallback, useMemo } from 'react'
-import ReactFlow, {
+import {
+  ReactFlow,
   Background,
   Controls,
   MiniMap,
   useNodesState,
   useEdgesState,
-  Node,
-  Edge,
   ReactFlowProvider,
-} from 'reactflow'
-import 'reactflow/dist/style.css'
+} from '@xyflow/react'
+import type { Node, Edge } from '@xyflow/react'
+import '@xyflow/react/dist/style.css'
 import { useStore } from '../../store'
-import type { EmotionArcNode, EmotionArcEdge, LustIntensityPoint, LustClimaxPoint } from '../../../config/types'
+import type { EmotionArcNode, EmotionArcEdge, LustIntensityPoint, LustClimaxPoint } from '@cfg/types'
 
 // ==================== Tab 定义 ====================
 type PlotTab =
@@ -316,19 +316,17 @@ export default function PlotView() {
             </div>
             {emotionArc ? (
               <div style={{ width: '100%', height: '80%', background: '#0f0f0f', borderRadius: 8, border: '1px solid #2a2a2a' }}>
-                <ReactFlowProvider>
-                  <ReactFlow
-                    nodes={efNodes}
-                    edges={efEdges}
-                    onNodesChange={onEfNodesChange}
-                    onEdgesChange={onEfEdgesChange}
-                    fitView
-                  >
-                    <Background color="#333" gap={16} />
-                    <Controls />
-                    <MiniMap nodeColor={(n) => (n.style?.background as string) || '#666'} />
-                  </ReactFlow>
-                </ReactFlowProvider>
+                <ReactFlow
+                  nodes={efNodes}
+                  edges={efEdges}
+                  onNodesChange={onEfNodesChange}
+                  onEdgesChange={onEfEdgesChange}
+                  fitView
+                >
+                  <Background color="#333" gap={16} />
+                  <Controls />
+                  <MiniMap nodeColor={(n) => (n.style?.background as string) || '#666'} />
+                </ReactFlow>
               </div>
             ) : (
               <div style={{ color: '#6b7280', textAlign: 'center', padding: 60 }}>暂无感情线数据</div>
@@ -511,19 +509,17 @@ export default function PlotView() {
             <h3 style={{ color: '#e0e0e0', marginBottom: 12 }}>🕸️ 关系图谱</h3>
             {characters.length > 0 ? (
               <div style={{ width: '100%', height: '90%', background: '#0f0f0f', borderRadius: 8, border: '1px solid #2a2a2a' }}>
-                <ReactFlowProvider>
-                  <ReactFlow
-                    nodes={relNodes}
-                    edges={relEdges}
-                    onNodesChange={onRelNodesChange}
-                    onEdgesChange={onRelEdgesChange}
-                    fitView
-                  >
-                    <Background color="#333" gap={16} />
-                    <Controls />
-                    <MiniMap nodeColor={(n) => (n.style?.background as string) || '#666'} />
-                  </ReactFlow>
-                </ReactFlowProvider>
+                <ReactFlow
+                  nodes={relNodes}
+                  edges={relEdges}
+                  onNodesChange={onRelNodesChange}
+                  onEdgesChange={onRelEdgesChange}
+                  fitView
+                >
+                  <Background color="#333" gap={16} />
+                  <Controls />
+                  <MiniMap nodeColor={(n) => (n.style?.background as string) || '#666'} />
+                </ReactFlow>
               </div>
             ) : (
               <div style={{ color: '#6b7280', textAlign: 'center', padding: 60 }}>暂无角色关系数据</div>
@@ -588,7 +584,9 @@ export default function PlotView() {
 
       {/* 右侧内容区 */}
       <div style={{ flex: 1, overflow: 'auto', background: '#050505' }}>
-        {renderTabContent()}
+        <ReactFlowProvider>
+          {renderTabContent()}
+        </ReactFlowProvider>
       </div>
     </div>
   )

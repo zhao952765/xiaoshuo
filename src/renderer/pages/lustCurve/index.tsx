@@ -5,7 +5,7 @@
 
 import React, { useState, useCallback } from 'react'
 import { useStore } from '../../store'
-import type { LustIntensityPoint } from '../../types/types'
+import type { LustIntensityPoint } from '@cfg/types'
 
 export default function LustCurveEditor() {
   const lustArc = useStore((s) => s.lustArc)

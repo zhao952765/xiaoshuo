@@ -16,7 +16,7 @@
  *   deduceTransformer.ts 负责「原始JSON → 前端可视化数据」
  */
 
-import type { Character, WorldSetting } from '../types/types'
+import type { Character, WorldSetting } from '@cfg/types'
 import { parseMarkdownFields, cleanMarkdown } from './markdownParser'
 
 // ==================== P0: isTitleLine 改进版 ====================

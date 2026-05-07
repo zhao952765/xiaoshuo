@@ -36,6 +36,7 @@ export default defineConfig({
       '@': resolve(__dirname, 'src/renderer'),
       '@main': resolve(__dirname, 'src/main'),
       '@prompts': resolve(__dirname, 'prompts'),
+      '@cfg': resolve(__dirname, 'src/config'),
     },
   },
   plugins: [

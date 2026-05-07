@@ -8,16 +8,16 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 
 // 核心页面
 import DashboardPage from './pages/dashboard'
-import DeducePage from './pages/deduce'
-import PlotView from './pages/plotView'
+import DeducePage from './core/deduce'
+import PlotView from './modules/plotView'
 import WritePage from './pages/write'
-import PolishPage from './pages/polish'
-import ChatPage from './pages/chat'
-import TagsPage from './pages/tags'
+import PolishPage from './core/polish'
+import ChatPage from './modules/chat'
+import TagsPage from './modules/tags'
 import AIModelPage from './pages/aiModel'
 import TemplatesPage from './pages/templates'
 import ExportPage from './pages/export'
-import MemoryPage from './pages/memory'
+import MemoryPage from './modules/memory'
 import SettingsPage from './pages/settings'
 
 export const NAV_ITEMS = [

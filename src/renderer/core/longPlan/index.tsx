@@ -8,7 +8,7 @@ import type {
   Volume,
   Character,
   WorldSetting,
-} from '../../../config/types'
+} from '@cfg/types'
 
 // ==========================================
 // 工具函数

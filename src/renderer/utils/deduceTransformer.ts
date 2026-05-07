@@ -1,4 +1,4 @@
-import type { AIResponse } from '@/types/types'
+import type { AIResponse } from '@cfg/types'
 
 const MAX_INPUT_LENGTH = 2000
 

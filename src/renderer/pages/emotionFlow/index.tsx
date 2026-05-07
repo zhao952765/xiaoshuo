@@ -11,7 +11,7 @@ import {
 import type { Node, Edge, Connection } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useStore } from '../../store'
-import type { EmotionArcNode, EmotionArcEdge, EmotionEventType } from '../../types/types'
+import type { EmotionArcNode, EmotionArcEdge, EmotionEventType } from '@cfg/types'
 
 const TYPE_OPTIONS: { value: EmotionEventType; label: string; color: string }[] = [
   { value: 'emotion', label: '感情', color: '#ec4899' },

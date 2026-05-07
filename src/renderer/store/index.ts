@@ -40,7 +40,7 @@ import type {
   NovelLength,
   StyleType,
   PolishLevel,
-} from '@/types/types'
+} from '@cfg/types'
 import { callAI } from '@/services/aiService'
 
 // ==========================================

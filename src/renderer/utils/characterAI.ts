@@ -17,8 +17,8 @@
  * - 目标/动机 → arc
  */
 
-import type { Character } from '../types/types'
-import { PERSONALITY_TAGS } from './character'
+import type { Character } from '@cfg/types'
+import { PERSONALITY_TAGS } from '../constants/character'
 
 // ==========================================
 // AI 结果自动解析回填（P0 核心资产）
