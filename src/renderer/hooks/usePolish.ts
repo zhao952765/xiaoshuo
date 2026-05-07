@@ -12,15 +12,19 @@ function splitText(text: string, size = CHUNK_SIZE): string[] {
   while (start < text.length) {
     let end = Math.min(start + size, text.length)
     if (end < text.length) {
-      // 向前找最近的段落分隔
+        // 向前找最近的段落分隔
       const nextPara = text.indexOf('\n\n', end - 100)
       if (nextPara > start + 50 && nextPara < end + 200) {
         end = nextPara + 2
       } else {
         // 找最近的句子结尾
-        const nextSentence = text.search(/[。！？\n]/, end - 50)
-        if (nextSentence > start + 50 && nextSentence < end + 100) {
-          end = nextSentence + 1
+        const slice = text.slice(end - 50, end + 100)
+        const nextSentence = slice.search(/[。！？\n]/)
+        if (nextSentence >= 0) {
+          const absPos = end - 50 + nextSentence
+          if (absPos > start + 50) {
+            end = absPos + 1
+          }
         }
       }
     }

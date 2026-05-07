@@ -23,7 +23,7 @@ const TYPE_OPTIONS: { value: EmotionEventType; label: string; color: string }[] 
 function emotionArcToFlowNodes(arc: EmotionArcNode[]): Node[] {
   return (arc || []).map((n) => ({
     id: n.id, type: 'default', position: n.position,
-    data: { label: n.data.label, ...n.data },
+    data: { ...n.data },
     style: {
       background: n.data.color || '#8b5cf6', color: '#fff',
       border: '2px solid #fff', borderRadius: '8px',
@@ -134,7 +134,7 @@ export default function EmotionFlowEditor() {
       edges: edges.map((e) => ({
         id: e.id, source: e.source, target: e.target,
         type: e.type as 'smoothstep' | 'default' | 'straight',
-        label: e.label || '', animated: e.animated || false,
+        label: String(e.label || ''), animated: e.animated || false,
         style: { stroke: '#8b5cf6', strokeWidth: 2 },
       })),
     })

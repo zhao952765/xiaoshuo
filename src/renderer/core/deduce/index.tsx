@@ -7,7 +7,7 @@ import { dispatchAI } from '@/services/aiDispatcher'
 import { deduceTransformer } from '@/utils/deduceTransformer'
 import type { DeduceResult } from '@/utils/deduceTransformer'
 import PageWrapper from '../../components/PageWrapper'
-import { theme } from '../../components/PageWrapper'
+import { theme } from '../../components/ui'
 
 export default function DeducePage() {
   const [input, setInput] = useState('')

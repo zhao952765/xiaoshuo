@@ -152,9 +152,9 @@ export interface StoreState {
   updateOutlineNodes: (nodes: OutlineNode[]) => void
 
   // 感情线 & 肉欲线
-  updateEmotionArc: (arc: EmotionArc | null) => void
+  updateEmotionArc: (arc: Partial<EmotionArc> | null) => void
   updateEmotionEvents: (events: EmotionArcEvent[]) => void
-  updateLustArc: (arc: LustArc | null) => void
+  updateLustArc: (arc: Partial<LustArc> | null) => void
 
   // 标签
   addTag: (tag: Tag) => void
@@ -615,21 +615,25 @@ export const useStore = create<StoreState>()(
 
         // ── 感情线 & 肉欲线 ──
         updateEmotionArc: (arc) => set((s) => {
+          if (!arc) return { emotionArc: null }
+          const merged = s.emotionArc ? { ...s.emotionArc, ...arc } : arc as EmotionArc
           const novel = s.currentNovel
-          const updatedNovel = novel && arc
-            ? { ...novel, emotionArcId: arc.id, updatedAt: Date.now() }
+          const updatedNovel = novel && merged
+            ? { ...novel, emotionArcId: merged.id, updatedAt: Date.now() }
             : novel
-          return { emotionArc: arc, currentNovel: updatedNovel }
+          return { emotionArc: merged, currentNovel: updatedNovel }
         }),
 
         updateEmotionEvents: (events) => set({ emotionEvents: events }),
 
         updateLustArc: (arc) => set((s) => {
+          if (!arc) return { lustArc: null }
+          const merged = s.lustArc ? { ...s.lustArc, ...arc } : arc as LustArc
           const novel = s.currentNovel
-          const updatedNovel = novel && arc
-            ? { ...novel, lustArcId: arc.id, updatedAt: Date.now() }
+          const updatedNovel = novel && merged
+            ? { ...novel, lustArcId: merged.id, updatedAt: Date.now() }
             : novel
-          return { lustArc: arc, currentNovel: updatedNovel }
+          return { lustArc: merged, currentNovel: updatedNovel }
         }),
 
         // ── 标签 ──

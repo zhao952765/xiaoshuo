@@ -1,26 +1,20 @@
+/**
+ * 从 AI 回复中提取记忆片段
+ */
 import type { MemoryItem } from './useMemory'
 
-const RULES: Array<{ keywords: string[]; type: MemoryItem['type']; priority: number }> = [
-  { keywords: ['名字', '名叫', '名为', '姓名', '人称', '角色'], type: 'character', priority: 1 },
-  { keywords: ['世界', '大陆', '位面', '宇宙', '星球'], type: 'world', priority: 2 },
-  { keywords: ['发生', '突然', '就在这时', '接下来', '剧情', '转折'], type: 'plot', priority: 3 },
-]
+export function extractMemory(text: string, addMemory: (item: Omit<MemoryItem, 'id'>) => void) {
+  // 简单启发式：超过 20 字且包含关键字的句子视为可能有价值
+  const lines = text.split(/[。！？\n]/).map((s) => s.trim()).filter((s) => s.length > 20)
 
-export function extractMemory(
-  text: string,
-  addMemory: (item: Omit<MemoryItem, 'id'>) => void,
-): void {
-  const matched = new Set<MemoryItem['type']>()
-  for (const rule of RULES) {
-    if (matched.has(rule.type)) continue
-    if (rule.keywords.some(kw => text.includes(kw))) {
-      matched.add(rule.type)
-      const lines = text.split('\n').filter(l => l.trim().length > 10)
-      const bestLine = lines.find(l => rule.keywords.some(kw => l.includes(kw)))
-      addMemory({
-        type: rule.type,
-        content: (bestLine || text).slice(0, 150),
-      })
+  for (const line of lines.slice(0, 3)) {
+    const lower = line.toLowerCase()
+    if (lower.includes('角色') || lower.includes('人物')) {
+      addMemory({ type: 'character', content: line })
+    } else if (lower.includes('世界') || lower.includes('设定') || lower.includes('背景')) {
+      addMemory({ type: 'world', content: line })
+    } else if (lower.includes('剧情') || lower.includes('情节') || lower.includes('故事')) {
+      addMemory({ type: 'plot', content: line })
     }
   }
 }

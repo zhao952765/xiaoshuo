@@ -57,7 +57,7 @@ export type RoleType = 'protagonist' | 'supporting' | 'minor' | 'antagonist';
 export type ChapterStatus = 'draft' | 'completed' | 'polished';
 
 /** 标签分类 */
-export type TagCategory = 'character' | 'profession' | 'scene' | 'plot' | 'fetish' | 'costume' | 'fantasy';
+export type TagCategory = 'character' | 'profession' | 'scene' | 'plot' | 'fetish' | 'costume' | 'fantasy' | 'emotion' | 'relation' | 'style' | 'world' | 'custom';
 
 /** 世界观类型 */
 export type WorldType = 'campus' | 'urban' | 'apocalypse' | 'fantasy' | 'scifi' | 'xuanhuan' | 'historical' | 'wuxia' | 'custom';
@@ -115,6 +115,8 @@ export interface Novel {
   emotionArcId: string | null;
   /** SRS v2.3: 关联肉欲线数据 */
   lustArcId: string | null;
+  /** 项目独立模型配置 */
+  projectModelId?: string;
   createdAt: number;
   updatedAt: number;
 }

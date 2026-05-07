@@ -8,6 +8,11 @@ export const TAG_CATEGORY_CONFIG: Record<TagCategory, { label: string; color: st
   fetish: { label: '性癖玩法', color: '#ec4899', icon: '🔥', description: '感官刺激、性癖元素、玩法类型', isHighlight: true },
   costume: { label: '恋物制服', color: '#dc2626', icon: '👗', description: '服装、制服、恋物元素' },
   fantasy: { label: '特殊幻想', color: '#a855f7', icon: '✨', description: '超自然、特殊设定、幻想元素' },
+  emotion: { label: '情绪氛围', color: '#f59e0b', icon: '😈', description: '情绪、氛围、心理感受' },
+  relation: { label: '人物关系', color: '#06b6d4', icon: '🔗', description: '角色之间的关系类型' },
+  style: { label: '文风风格', color: '#14b8a6', icon: '✒️', description: '写作风格、文笔特征' },
+  world: { label: '世界观', color: '#6366f1', icon: '🌍', description: '世界设定、背景规则' },
+  custom: { label: '自定义', color: '#6b7280', icon: '🏷️', description: '用户自定义标签' },
 }
 
 // 分类优先级
@@ -38,6 +43,7 @@ export const TAG_WEIGHT_RECOMMENDATIONS: Record<string, number> = {
 export const CATEGORY_DEFAULT_WEIGHT: Record<TagCategory, number> = {
   character: 1.20, profession: 1.18, scene: 1.15, plot: 1.32,
   fetish: 1.45, costume: 1.30, fantasy: 1.48,
+  emotion: 1.25, relation: 1.22, style: 1.15, world: 1.20, custom: 1.10,
 };
 
 // ==================== 性能优化：缓存 + 查找表 ====================
@@ -136,6 +142,11 @@ export const TAG_KEYWORD_MAP: Record<TagCategory, string[]> = {
   fetish: ['强制', '强制高潮', '连续高潮', '潮吹', '失禁', '羞辱', '捆绑', '药物催情'],
   costume: ['蕾丝内衣', '半脱制服', '撕裂丝袜', '透明情趣装', '吊带丝袜', '高跟鞋'],
   fantasy: ['时停', '催眠', '意识操控', '身体敏感化', '记忆篡改'],
+  emotion: ['暧昧', '紧张', '温馨', '刺激', '压抑', '狂热', '迷恋'],
+  relation: ['师生', '上下级', '青梅竹马', '仇敌', '契约', '主仆'],
+  style: ['细腻', '粗粝', '文艺', '直白', '悬疑', '轻松', '暗黑'],
+  world: ['现代都市', '古代架空', '末世废土', '仙侠修真', '科幻未来'],
+  custom: [],
 };
 
 export const LOCAL_TAG_RULES: { keyword: string; category: TagCategory; expansions: string[] }[] = [
@@ -159,6 +170,7 @@ export function offlineExpand(keywords: string[]): Record<TagCategory, string[]>
 
   const result: Record<TagCategory, string[]> = {
     character: [], profession: [], scene: [], plot: [], fetish: [], costume: [], fantasy: [],
+    emotion: [], relation: [], style: [], world: [], custom: [],
   };
 
   for (const rawKw of keywords) {

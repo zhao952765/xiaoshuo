@@ -13,9 +13,11 @@ import { LoadingFallback } from './components/ui'
 // 按需加载页面（tree-shake 友好）
 const Dashboard = lazy(() => import('./pages/dashboard'))
 const Deduce = lazy(() => import('./core/deduce'))
+const ChunkDeduce = lazy(() => import('./pages/chunkDeduce'))
 const LongPlan = lazy(() => import('./core/longPlan'))
 const ContinueWrite = lazy(() => import('./core/continue'))
 const Polish = lazy(() => import('./core/polish'))
+const Write = lazy(() => import('./pages/write'))
 const Character = lazy(() => import('./modules/character'))
 const World = lazy(() => import('./modules/world'))
 const PlotView = lazy(() => import('./modules/plotView'))
@@ -25,6 +27,10 @@ const AIModel = lazy(() => import('./pages/aiModel'))
 const Chat = lazy(() => import('./modules/chat'))
 const Logs = lazy(() => import('./pages/logs'))
 const Settings = lazy(() => import('./pages/settings'))
+const EmotionFlow = lazy(() => import('./pages/emotionFlow'))
+const LustCurve = lazy(() => import('./pages/lustCurve'))
+const ExportCenter = lazy(() => import('./pages/export'))
+const Templates = lazy(() => import('./pages/templates'))
 
 function App() {
   const validateCurrentModel = useStore((s) => s.validateCurrentModel);
@@ -72,6 +78,12 @@ function App() {
               <Route path="/chat" element={<Chat />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/write" element={<Write />} />
+              <Route path="/chunkDeduce" element={<ChunkDeduce />} />
+              <Route path="/emotionFlow" element={<EmotionFlow />} />
+              <Route path="/lustCurve" element={<LustCurve />} />
+              <Route path="/export" element={<ExportCenter />} />
+              <Route path="/templates" element={<Templates />} />
             </Routes>
           </Suspense>
         </main>

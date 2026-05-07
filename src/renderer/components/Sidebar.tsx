@@ -52,7 +52,7 @@ const Sidebar = memo(function Sidebar() {
       <div style={{ flex: 1, overflow: 'auto', padding: '8px 0' }}>
         {NAV_ITEMS.map((item) => {
           const isActive = location.pathname === item.path
-          const core = ['/', '/deduce', '/plot', '/write'].includes(item.path)
+          const core = ['/', '/deduce', '/plotview', '/write', '/chunkDeduce', '/longplan', '/continue', '/polish'].includes(item.path)
 
           return (
             <button
