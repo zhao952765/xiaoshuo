@@ -7,7 +7,7 @@ import { resolve } from 'path'
 export default defineConfig({
   base: './',
   build: {
-    cssMinify: false,
+    cssMinify: true,
     rollupOptions: {
       output: {
         // 代码分割：按路由拆分 chunk
@@ -51,6 +51,7 @@ export default defineConfig({
               output: {
                 entryFileNames: 'index.js',
               },
+              external: ['electron'],
             },
           },
         },
@@ -64,7 +65,19 @@ export default defineConfig({
               output: {
                 entryFileNames: 'preload.mjs',
               },
+              external: ['electron'],
             },
+          },
+        },
+      },
+      renderer: {
+        // 支持在渲染进程使用 Node.js API
+        resolve: {
+          alias: {
+            '@': resolve(__dirname, 'src/renderer'),
+            '@main': resolve(__dirname, 'src/main'),
+            '@prompts': resolve(__dirname, 'prompts'),
+            '@cfg': resolve(__dirname, 'src/config'),
           },
         },
       },

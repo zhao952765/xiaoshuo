@@ -14,7 +14,16 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "strict": true,
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/renderer/*"],
+      "@main/*": ["src/main/*"],
+      "@cfg/*": ["src/config/*"],
+      "@prompts/*": ["prompts/*"]
+    }
   },
   "include": ["src", "electron", "vite.config.ts"]
 }
